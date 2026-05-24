@@ -2,3 +2,6 @@
 demo-mac-frame-*.png
 scrying-linux-snapshot.png
 demo-linux-*.png
+
+# sem (Ataraxy-Labs) semantic-diff index cache — local, never committed.
+.sem/
