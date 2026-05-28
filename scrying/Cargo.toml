@@ -21,6 +21,11 @@ webkitgtk-fallback = [
 # selection in `lib.rs` lets `webkit6` win if both are enabled, but
 # expect noisier build output and a larger dependency graph.
 webkit6 = ["dep:gtk4", "dep:webkit6"]
+# Hand-written WPEPlatform FFI producer (the planned Linux primary).
+# Requires WPEWebKit dev libs at build time (Fedora 44):
+#   sudo dnf install -y wpewebkit-devel libwpe-devel wpebackend-fdo-devel
+# Links libWPEWebKit-2.0.so via pkg-config (wpe-webkit-2.0) in build.rs.
+wpe = ["dep:glib"]
 
 [dependencies]
 dpi.workspace = true
@@ -87,6 +92,9 @@ webkit6 = { version = "0.6", features = ["v2_44"], optional = true }
 # we don't link against libdrm directly in the test code.)
 gbm = "0.18"
 pollster = "0.4"
+
+[build-dependencies]
+pkg-config = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Single objc2 0.6.x line. Default features kept on all of these — slim
