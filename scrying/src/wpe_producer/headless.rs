@@ -55,6 +55,13 @@ pub(super) fn build_producer_view()
         )
     };
     if raw_obj.is_null() {
+        // SAFETY: display and network_session are valid transfer-full GObject
+        // pointers from the *_new constructors above; g_object_new did not adopt
+        // them into a returned object, so release our refs before bailing.
+        unsafe {
+            glib::gobject_ffi::g_object_unref(display as *mut glib::gobject_ffi::GObject);
+            glib::gobject_ffi::g_object_unref(network_session as *mut glib::gobject_ffi::GObject);
+        }
         return Err(WebSurfaceError::Platform(
             "g_object_new returned null for WebKitWebView".into(),
         ));
