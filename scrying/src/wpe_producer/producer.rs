@@ -9,23 +9,60 @@ use crate::{
 
 use super::WpeProducerConfig;
 
-/// Linux WPE producer shell.
+/// Owned GObject handles for the WPE headless producer.
 ///
-/// `view_backend` in the old scaffold's `new` was expected to be the
-/// host-created `struct wpe_view_backend *` once the WPE FFI bridge lands.
-/// The current scaffold replaces that with a safe constructor; real headless
-/// construction lands in Task 3.
+/// All fields live as long as the `WpeProducer` that contains them.
+#[cfg(feature = "wpe")]
+pub(super) struct WpeHandles {
+    /// Owns the WebKitWebView (and, transitively, the bound headless display
+    /// and ephemeral network session).
+    pub webview: glib::Object,
+    /// Raw WPEView pointer borrowed from the webview; valid for the webview's
+    /// lifetime (i.e. for the lifetime of this struct).
+    pub view: *mut super::ffi::WPEView,
+    /// GLib main context the producer is affine to; pumped by
+    /// acquire/navigate calls.
+    pub main_context: glib::MainContext,
+}
+
+
+/// Linux WPE producer — constructs and owns a headless WPEPlatform display,
+/// a `WebKitWebView` bound to that display, and the associated `WPEView`.
+/// Frames arrive as DMABUF exports that scrying imports through wgpu's Vulkan
+/// external-memory path. All GObject lifetime management is handled internally;
+/// callers interact only through the `WebSurfaceProducer` trait.
 pub struct WpeProducer {
     pub(super) capabilities: WebSurfaceCapabilities,
     pub(super) size: PhysicalSize<u32>,
     pub(super) offset: (f32, f32),
     pub(super) pending_frame: Arc<Mutex<Option<DmaBufImage>>>,
     pub(super) generation: u64,
+    #[cfg(feature = "wpe")]
+    pub(super) handles: WpeHandles,
 }
 
 impl WpeProducer {
-    /// Placeholder constructor — real headless construction lands in
-    /// Task 3. Without the `wpe` feature this is the only constructor.
+    #[cfg(feature = "wpe")]
+    pub fn new(config: WpeProducerConfig) -> Result<Self, crate::WebSurfaceError> {
+        use crate::WebSurfaceError;
+        if config.size.width == 0 || config.size.height == 0 {
+            return Err(WebSurfaceError::Platform(format!(
+                "WPE producer size must be non-zero, got {}x{}",
+                config.size.width, config.size.height
+            )));
+        }
+        let main_context = glib::MainContext::default();
+        let (webview, view) = super::headless::build_producer_view()?;
+        Ok(Self {
+            capabilities: super::linux_wpe_capabilities(),
+            size: config.size,
+            offset: config.offset,
+            pending_frame: Arc::new(Mutex::new(None)),
+            generation: 0,
+            handles: WpeHandles { webview, view, main_context },
+        })
+    }
+
     #[cfg(not(feature = "wpe"))]
     pub fn new(config: WpeProducerConfig) -> Result<Self, crate::WebSurfaceError> {
         if config.size.width == 0 || config.size.height == 0 {
