@@ -5,7 +5,7 @@
 //! headers under /usr/include/wpe-webkit-2.0.
 
 use glib::ffi::GType;
-use std::os::raw::c_int;
+use std::os::raw::{c_char, c_int};
 
 #[repr(C)]
 pub struct WPEDisplay {
@@ -67,4 +67,13 @@ unsafe extern "C" {
     pub fn webkit_web_view_get_display(web_view: *mut WebKitWebView) -> *mut WPEDisplay;
     pub fn webkit_web_view_get_wpe_view(web_view: *mut WebKitWebView) -> *mut WPEView;
     pub fn webkit_web_view_get_type() -> GType;
+
+    // Load an in-memory HTML document into the WebView. Both strings are
+    // copied by WebKit before the call returns. `base_uri` may be NULL,
+    // in which case "about:blank" is used.
+    pub fn webkit_web_view_load_html(
+        web_view: *mut WebKitWebView,
+        content: *const c_char,
+        base_uri: *const c_char,
+    );
 }

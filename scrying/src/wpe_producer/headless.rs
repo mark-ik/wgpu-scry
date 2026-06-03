@@ -25,6 +25,46 @@ use crate::native_frame::{DmaBufImage, DmaBufPlane, SyncMechanism};
 use glib::prelude::*;
 use glib::translate::{IntoGlib, from_glib, from_glib_full};
 use std::os::raw::c_char;
+use std::time::{Duration, Instant};
+
+/// Deadline-bounded glib MainContext pump.
+///
+/// Iterates the supplied `ctx` non-blockingly until `cond` returns true or the
+/// deadline elapses. Mirrors the GTK/WebKit6 producers' helpers; small sleep
+/// between iterations keeps this off a hot spin while still being responsive
+/// to incoming WPE callbacks.
+pub(super) fn pump_until(
+    ctx: &glib::MainContext,
+    deadline: Instant,
+    mut cond: impl FnMut() -> bool,
+) -> Result<(), WebSurfaceError> {
+    while !cond() {
+        if Instant::now() >= deadline {
+            return Err(WebSurfaceError::NotReady(
+                "WPE main-loop pump deadline exceeded",
+            ));
+        }
+        ctx.iteration(false); // process pending events, non-blocking
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    Ok(())
+}
+
+/// Drive an inline HTML document into a freshly-constructed headless WebView
+/// for the runtime smoke test. The base URI is null (about:blank).
+///
+/// SAFETY: `webview` must be a live `WebKitWebView` GObject; `load_html` copies
+/// both `content` and `base_uri` before returning, so the CString can be dropped
+/// at end of scope.
+pub(super) fn load_html_for_smoke(webview: &glib::Object, html: &str) {
+    use glib::translate::ToGlibPtr;
+    let raw: *mut ffi::WebKitWebView =
+        ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(webview).0 as *mut _;
+    let c_html = std::ffi::CString::new(html).expect("smoke html had interior NUL");
+    // SAFETY: `raw` is a borrowed WebKitWebView pointer valid for `webview`'s
+    // lifetime; load_html copies its arguments before returning.
+    unsafe { ffi::webkit_web_view_load_html(raw, c_html.as_ptr(), std::ptr::null()) };
+}
 
 /// Construct a headless `WPEDisplay` and a `WebKitWebView` bound to it.
 ///
@@ -237,27 +277,63 @@ pub(super) fn connect_buffer_rendered(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    /// Construct a full `WpeProducer` (which connects the `buffer-rendered`
-    /// frame seam inside `new`) and assert it succeeds. This is the seam-wiring
-    /// smoke: a clean run with no GLib-CRITICAL / panic proves the signal
-    /// connects on a live headless view.
+    /// End-to-end runtime smoke: build a headless `WpeProducer`, load an
+    /// inline solid-color page, pump the producer's glib context until the
+    /// `buffer-rendered` seam fires, then assert the resulting `DmaBufImage`
+    /// is well-formed (non-zero size, >=1 plane, valid dup'd fd, no sync).
     ///
-    /// This is the ONLY runtime-WPE ignored test in this module; see the
-    /// module doc for why we can't run multiple per `cargo test` invocation.
+    /// Strict superset of the prior connect-only test: a successful render
+    /// proves construction, signal connect, and a first real frame. WPE only
+    /// supports one headless display init/teardown per process, so this is
+    /// the ONLY `#[ignore]`d runtime-WPE test in this module.
     #[test]
     #[ignore = "needs a headless WPE display (GPU + Wayland); run manually"]
-    fn producer_constructs_and_connects() {
+    fn renders_one_dmabuf_frame() {
+        use crate::native_frame::{NativeFrame, SyncMechanism};
         use crate::wpe_producer::{WpeProducer, WpeProducerConfig};
+        use crate::{WebSurfaceFrame, WebSurfaceProducer};
         use dpi::PhysicalSize;
 
-        let config = WpeProducerConfig::new(PhysicalSize::new(64, 64), std::env::temp_dir());
-        let producer = WpeProducer::new(config);
-        assert!(
-            producer.is_ok(),
-            "WpeProducer::new (with buffer-rendered connect) must succeed: {:?}",
-            producer.err()
+        let config = WpeProducerConfig::new(PhysicalSize::new(256, 256), std::env::temp_dir());
+        let mut producer = WpeProducer::new(config).expect("construct headless producer");
+
+        // Clone the webview (cheap GObject ref-bump) so we hand `load_html_for_smoke`
+        // a borrow that doesn't alias `&mut producer` for the pump/acquire below.
+        let webview = producer.handles.webview.clone();
+        super::load_html_for_smoke(
+            &webview,
+            "<body style='margin:0;background:#1e90ff'></body>",
         );
+
+        // Pump the producer's stored main context. WPE delivers buffer-rendered
+        // on the same context the WebView was constructed under (which is
+        // `glib::MainContext::default()` per producer.rs). Pump variant 1
+        // (producer.handles.main_context) is sufficient on this box.
+        let ctx = producer.handles.main_context.clone();
+        let pending = producer.pending_frame.clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        super::pump_until(&ctx, deadline, || {
+            pending.lock().map(|s| s.is_some()).unwrap_or(false)
+        })
+        .expect("a frame should arrive within 5s");
+
+        let frame = producer.acquire_frame().expect("frame available");
+        let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img)) = frame else {
+            panic!("expected a DMABUF frame");
+        };
+        assert!(img.size.width > 0 && img.size.height > 0, "non-zero size");
+        assert!(!img.planes.is_empty(), "at least one plane");
+        assert!(img.planes[0].fd >= 0, "valid dup'd fd");
+        assert_eq!(img.producer_sync, SyncMechanism::None);
+        eprintln!(
+            "smoke: {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
+            img.size.width,
+            img.size.height,
+            img.drm_format,
+            img.drm_modifier,
+            img.planes.len()
+        );
+        // Close the fds we just took ownership of (no importer in this test).
+        super::super::producer::close_frame_fds(&img);
     }
 }
