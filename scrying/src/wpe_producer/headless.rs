@@ -7,6 +7,17 @@
 //! An ephemeral `WebKitNetworkSession` is supplied at construction time so
 //! WebKit does not auto-create a persistent on-disk `WebsiteDataStore` whose
 //! destructor asserts during process teardown (`atexit`).
+//!
+//! ## Runtime tests: one per process
+//!
+//! Standing up a headless `WPEDisplay` + `WebKitWebView` initializes
+//! process-global WebKit state. Constructing a second producer in the same
+//! process — sequentially or in parallel — has been observed to SIGABRT (in
+//! parallel) or hang in WebKit teardown between displays (sequential, even
+//! under `--test-threads=1`). So this module exposes a single `#[ignore]`d
+//! runtime test; if more end-to-end coverage is needed, add it to a separate
+//! `tests/` integration target (each `tests/*.rs` is its own binary, so its
+//! WebKit state is independent of this one).
 
 use super::ffi;
 use crate::WebSurfaceError;
@@ -228,82 +239,13 @@ pub(super) fn connect_buffer_rendered(
 mod tests {
     use super::*;
 
-    #[test]
-    #[ignore = "needs a headless WPE display (GPU + Wayland); run manually"]
-    fn headless_webview_binds_display() {
-        let (_webview, view) = build_producer_view().expect("build producer view");
-        assert!(!view.is_null(), "webview must expose a WPEView");
-    }
-
-    /// Diagnostic: enumerate the signals defined on the WPEView GType (and the
-    /// concrete view subclass) so the `buffer-rendered` frame-seam name can be
-    /// confirmed empirically (the headers expose it only as a method, not a
-    /// vfunc/signal). Prints all signal names + whether `buffer-rendered`
-    /// resolves via `g_signal_lookup`. Does not connect (so it can't panic on a
-    /// missing signal).
-    #[test]
-    #[ignore = "needs a headless WPE display (GPU + Wayland); run manually"]
-    fn wpe_view_signal_introspection() {
-        use glib::subclass::signal::SignalId;
-
-        // Build a real view so the concrete subclass GType is registered. The
-        // parent chain reaches the base WPEView type, so we don't need a
-        // separate `wpe_view_get_type` FFI symbol just for the diagnostic.
-        let (_webview, view) = build_producer_view().expect("build producer view");
-        assert!(!view.is_null());
-
-        let view_obj: glib::Object =
-            unsafe { glib::translate::from_glib_none(view as *mut glib::gobject_ffi::GObject) };
-        let concrete_type = view_obj.type_();
-
-        eprintln!("--- signals on {concrete_type} and ancestors ---");
-        list_signals(concrete_type);
-
-        // Resolve against the concrete type: `g_signal_lookup` walks ancestors,
-        // so a signal defined on the base WPEView is found here too.
-        let found = SignalId::lookup("buffer-rendered", concrete_type).is_some();
-        eprintln!("buffer-rendered resolves via g_signal_lookup: {found}");
-        assert!(
-            found,
-            "the `buffer-rendered` signal was not found on WPEView; \
-             inspect the printed signal list to find the real frame-seam signal"
-        );
-    }
-
-    /// Walk a GType (and its ancestors) printing every signal id's name.
-    fn list_signals(ty: glib::Type) {
-        let mut cursor = Some(ty);
-        while let Some(t) = cursor {
-            let mut n: u32 = 0;
-            let ids = unsafe {
-                glib::gobject_ffi::g_signal_list_ids(t.into_glib(), &mut n as *mut u32)
-            };
-            if !ids.is_null() && n > 0 {
-                let slice = unsafe { std::slice::from_raw_parts(ids, n as usize) };
-                for &id in slice {
-                    let mut q = std::mem::MaybeUninit::<glib::gobject_ffi::GSignalQuery>::uninit();
-                    let name = unsafe {
-                        glib::gobject_ffi::g_signal_query(id, q.as_mut_ptr());
-                        let q = q.assume_init();
-                        std::ffi::CStr::from_ptr(q.signal_name as *const std::os::raw::c_char)
-                            .to_string_lossy()
-                            .into_owned()
-                    };
-                    eprintln!("  [{t}] signal: {name}");
-                }
-            }
-            if !ids.is_null() {
-                unsafe { glib::ffi::g_free(ids as *mut std::os::raw::c_void) };
-            }
-            // GObject signals are only listed for the exact type, so walk up.
-            cursor = t.parent();
-        }
-    }
-
     /// Construct a full `WpeProducer` (which connects the `buffer-rendered`
     /// frame seam inside `new`) and assert it succeeds. This is the seam-wiring
     /// smoke: a clean run with no GLib-CRITICAL / panic proves the signal
     /// connects on a live headless view.
+    ///
+    /// This is the ONLY runtime-WPE ignored test in this module; see the
+    /// module doc for why we can't run multiple per `cargo test` invocation.
     #[test]
     #[ignore = "needs a headless WPE display (GPU + Wayland); run manually"]
     fn producer_constructs_and_connects() {
