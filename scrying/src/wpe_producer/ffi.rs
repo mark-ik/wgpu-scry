@@ -36,9 +36,6 @@ unsafe extern "C" {
     // WPEPlatform headless display constructor — the self-owned display the
     // producer renders into (no compositor surface).
     pub fn wpe_display_headless_new() -> *mut WPEDisplay;
-    // GType of WPEDisplay; used to type the GValue when binding the display
-    // construct property on the WebView.
-    pub fn wpe_display_get_type() -> GType;
 
     // WPEView frame lifecycle — release a buffer back to the producer once
     // scrying has finished importing it (used in later tasks).
@@ -71,6 +68,9 @@ unsafe extern "C" {
     // Load an in-memory HTML document into the WebView. Both strings are
     // copied by WebKit before the call returns. `base_uri` may be NULL,
     // in which case "about:blank" is used.
+    // Currently used only by the smoke test (cfg(test)); promoted to the
+    // public navigation API in Phase 4c.3.
+    #[allow(dead_code)]
     pub fn webkit_web_view_load_html(
         web_view: *mut WebKitWebView,
         content: *const c_char,

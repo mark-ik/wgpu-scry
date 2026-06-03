@@ -13,7 +13,13 @@ use super::WpeProducerConfig;
 /// Owned GObject handles for the WPE headless producer.
 ///
 /// All fields live as long as the `WpeProducer` that contains them.
+///
+/// `webview` and `main_context` are held for their Drop / pump side effects
+/// (the field-Drop of `webview` releases the WebView's refs on display and
+/// network-session; `main_context` is pumped by acquire/navigate helpers in
+/// tests and in 4c.3). Their fields are not read directly here.
 #[cfg(feature = "wpe")]
+#[allow(dead_code)]
 pub(super) struct WpeHandles {
     /// Owns the WebKitWebView (and, transitively, the bound headless display
     /// and ephemeral network session).
@@ -213,6 +219,12 @@ impl Drop for WpeProducer {
     fn drop(&mut self) {
         // Close fds on any frame that was queued but never handed to the
         // importer. Mutex poisoning -> still take and close (best effort).
+        //
+        // Drop order is load-bearing: `pending_frame` is declared above
+        // `handles` in `WpeProducer`, so Rust drops it (and any frame fds
+        // we just took) BEFORE `handles.webview`'s field-Drop tears the
+        // WebView down and disconnects the buffer-rendered closure. Don't
+        // reorder those struct fields without revisiting this.
         let slot = match self.pending_frame.lock() {
             Ok(mut s) => s.take(),
             Err(p) => p.into_inner().take(),
@@ -232,8 +244,8 @@ impl WebSurfaceProducer for WpeProducer {
 
     fn acquire_frame(&mut self) -> Result<WebSurfaceFrame, WebSurfaceError> {
         self.try_acquire_frame()?
-            .ok_or(WebSurfaceError::Unsupported(
-                "WpeProducer has no queued DMABUF frame; WPE callback bridge is not wired yet",
+            .ok_or(WebSurfaceError::NotReady(
+                "no DMABUF frame queued yet; pump the producer's main context",
             ))
     }
 
@@ -322,6 +334,12 @@ mod fd_tests {
         assert!(fd_open(fresh_fd),  "fresh frame's fd must remain open");
     }
 
+    // Gated to the non-wpe build so this test exercises Drop without
+    // standing up a real WPE display (which would (a) violate the
+    // one-WPE-per-process constraint documented in headless.rs and (b)
+    // collide with the smoke test in --features wpe runs). The Drop
+    // logic itself is feature-independent.
+    #[cfg(not(feature = "wpe"))]
     #[test]
     fn dropping_producer_closes_unconsumed_fd() {
         let _guard = fd_test_lock();

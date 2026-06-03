@@ -33,6 +33,10 @@ use std::time::{Duration, Instant};
 /// deadline elapses. Mirrors the GTK/WebKit6 producers' helpers; small sleep
 /// between iterations keeps this off a hot spin while still being responsive
 /// to incoming WPE callbacks.
+///
+/// Currently only used by the smoke test; promoted to drive navigation /
+/// first-frame waits in Phase 4c.3.
+#[allow(dead_code)]
 pub(super) fn pump_until(
     ctx: &glib::MainContext,
     deadline: Instant,
@@ -56,6 +60,9 @@ pub(super) fn pump_until(
 /// SAFETY: `webview` must be a live `WebKitWebView` GObject; `load_html` copies
 /// both `content` and `base_uri` before returning, so the CString can be dropped
 /// at end of scope.
+///
+/// Test-only — Phase 4c.3 will add the real `load_html` / `load_uri` surface.
+#[cfg(test)]
 pub(super) fn load_html_for_smoke(webview: &glib::Object, html: &str) {
     use glib::translate::ToGlibPtr;
     let raw: *mut ffi::WebKitWebView =

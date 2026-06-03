@@ -37,6 +37,10 @@ pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
             UnsupportedReason::NativeImportNotYetImplemented,
         ),
         supported_frames: vec![NativeFrameKind::DmaBufImage],
-        reason: "WPE is the planned Linux primary backend (DMABUF + Vulkan external memory); the producer API and DMABUF frame contract are present, but the WPE FFI callback bridge and Vulkan importer are not wired yet.",
+        reason: if cfg!(feature = "wpe") {
+            "WPE is the Linux primary backend (DMABUF + Vulkan external memory); the producer constructs a headless WPEDisplay + WebKitWebView and the buffer-rendered seam produces DmaBufImage frames. The wgpu-side importer integration is the remaining wiring."
+        } else {
+            "WPE producer is compiled as a no-op scaffold; rebuild with `--features wpe` to enable the WPEPlatform FFI bridge and DMABUF frame production."
+        },
     }
 }
