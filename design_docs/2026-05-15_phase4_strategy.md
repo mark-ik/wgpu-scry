@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** Strategy locked; sub-phase 4a in flight.
+**Status:** 4a + 4b.1 + 4c.1 + 4c.2 shipped; 4c.3+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -335,10 +335,18 @@ artifact.
       plain C, bound via inline FFI (see 4b decision doc)
 - [ ] **4b.3** `wpe-webkit-sys` + safe `wpe-webkit` published (gir;
       Gir.toml sketched in 4b decision doc; blocked on a WPE install)
-- [ ] **4c.1** Working WPE install on the dev machine (Flatpak SDK
-      or COPR or source)
-- [ ] **4c.2** `wpe_producer` FFI bridge wired (`WPEViewBackendDMABuf`
-      → `DmaBufImage` → `enqueue_dmabuf_frame`)
+- [x] **4c.1** Working WPE install on the dev machine — philn COPR,
+      WPEWebKit 2.52.3 + libwpe 1.16.2 + wpebackend-fdo 1.16.1; pivot
+      to WPEPlatform headless captured in
+      [`2026-05-20_phase4b_wpe_bindings_decision.md`](2026-05-20_phase4b_wpe_bindings_decision.md)
+- [x] **4c.2** `wpe_producer` frame seam wired on WPEPlatform headless
+      (`buffer-rendered` signal → `WPEBufferDMABuf` → `DmaBufImage` →
+      `FrameSink`); spec
+      [`2026-05-20_phase4c_wpe_platform_producer.md`](2026-05-20_phase4c_wpe_platform_producer.md),
+      plan [`2026-05-20_phase4c2_implementation_plan.md`](2026-05-20_phase4c2_implementation_plan.md),
+      retrospective [`2026-06-03_phase4c2_retrospective.md`](2026-06-03_phase4c2_retrospective.md).
+      Smoke renders a real `DmaBufImage` (1024×768 XR24 on AMD-tiled
+      modifier); explicit-sync stays dormant (no fence getter yet).
 - [ ] **4c.3** Producer trait surface: navigate, resize, input
       forwarding via `wpe_view_backend_dispatch_*_event`
 - [ ] **4c.4** Same Phase 2b–2e surface ported from
