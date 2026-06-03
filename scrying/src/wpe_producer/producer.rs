@@ -209,6 +209,22 @@ impl WpeProducer {
     }
 }
 
+impl Drop for WpeProducer {
+    fn drop(&mut self) {
+        // Close fds on any frame that was queued but never handed to the
+        // importer. Mutex poisoning -> still take and close (best effort).
+        let slot = match self.pending_frame.lock() {
+            Ok(mut s) => s.take(),
+            Err(p) => p.into_inner().take(),
+        };
+        if let Some(frame) = slot {
+            close_frame_fds(&frame);
+        }
+        // GObject handles (under feature = "wpe") drop via their own field
+        // Drops — webview unref propagates to display + network-session.
+    }
+}
+
 impl WebSurfaceProducer for WpeProducer {
     fn capabilities(&self) -> WebSurfaceCapabilities {
         self.capabilities.clone()
@@ -245,5 +261,81 @@ impl WebSurfaceProducer for WpeProducer {
     fn set_offset(&mut self, x: f32, y: f32) -> Result<(), WebSurfaceError> {
         self.offset = (x, y);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fd_tests {
+    use super::*;
+    use crate::native_frame::{DmaBufImage, DmaBufPlane, SyncMechanism};
+
+    // Serialize all fd tests so parallel test threads don't recycle fd
+    // numbers between the close-under-test and the fd_open assertion.
+    static FD_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    fn fd_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        FD_TEST_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Open a one-shot pipe fd we can watch for closure. Closes the write
+    /// end so only the read end is observable.
+    fn pipe_fd() -> i32 {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        unsafe { libc::close(fds[1]) }; // close write end, keep read end
+        fds[0]
+    }
+
+    /// True iff the fd is still open in this process.
+    fn fd_open(fd: i32) -> bool {
+        unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
+    }
+
+    fn frame_with_fd(fd: i32) -> DmaBufImage {
+        DmaBufImage {
+            size: dpi::PhysicalSize::new(4, 4),
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            drm_format: 0,
+            drm_modifier: 0,
+            planes: vec![DmaBufPlane { fd, offset: 0, stride: 16 }],
+            generation: 0,
+            producer_sync: SyncMechanism::None,
+            semaphore_fd: None,
+        }
+    }
+
+    #[test]
+    fn evicting_stale_frame_closes_its_fds() {
+        let _guard = fd_test_lock();
+        let sink = FrameSink {
+            pending: Arc::new(Mutex::new(None)),
+            generation: Arc::new(AtomicU64::new(0)),
+        };
+        let stale_fd = pipe_fd();
+        sink.submit(frame_with_fd(stale_fd));
+        let fresh_fd = pipe_fd();
+        sink.submit(frame_with_fd(fresh_fd)); // evicts stale -> must close stale_fd
+        assert!(!fd_open(stale_fd), "stale frame's fd must be closed on eviction");
+        assert!(fd_open(fresh_fd),  "fresh frame's fd must remain open");
+    }
+
+    #[test]
+    fn dropping_producer_closes_unconsumed_fd() {
+        let _guard = fd_test_lock();
+        use crate::wpe_producer::WpeProducerConfig;
+        let leftover_fd = pipe_fd();
+        {
+            let producer = WpeProducer::new(WpeProducerConfig::new(
+                dpi::PhysicalSize::new(8, 8),
+                std::env::temp_dir(),
+            )).expect("non-wpe stub constructor must succeed");
+            // Inject an unconsumed frame directly into the producer's slot.
+            *producer.pending_frame.lock().unwrap() = Some(frame_with_fd(leftover_fd));
+            // (producer goes out of scope here -> Drop must close the fd)
+        }
+        assert!(!fd_open(leftover_fd), "unconsumed frame's fd must be closed when producer drops");
     }
 }
