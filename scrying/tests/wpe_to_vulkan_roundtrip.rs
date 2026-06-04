@@ -101,6 +101,36 @@ fn wpe_to_vulkan_round_trip() {
         image.planes.len()
     );
 
+    // --- 3b. Plane-fd diagnostic for the (α) multi-plane import design. ---
+    //
+    // For each plane: fstat the dup'd fd and print (fd, st_ino, offset,
+    // stride). If multiple planes share the same st_ino, they reference
+    // the same kernel DMABUF (the AMD-on-Mesa convention: one buffer +
+    // aux DCC metadata, distinguished by per-plane offsets). Different
+    // inodes would mean genuinely separate DMABUFs requiring distinct
+    // VkDeviceMemory imports.
+    for (i, plane) in image.planes.iter().enumerate() {
+        let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: plane.fd is a valid producer-owned fd; fstat is read-only.
+        let rc = unsafe { libc::fstat(plane.fd, st.as_mut_ptr()) };
+        if rc == 0 {
+            let st = unsafe { st.assume_init() };
+            eprintln!(
+                "wpe→vk:   plane[{}]: fd={} st_ino={} offset={} stride={}",
+                i, plane.fd, st.st_ino, plane.offset, plane.stride
+            );
+        } else {
+            eprintln!(
+                "wpe→vk:   plane[{}]: fd={} fstat failed errno={} offset={} stride={}",
+                i,
+                plane.fd,
+                std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
+                plane.offset,
+                plane.stride
+            );
+        }
+    }
+
     // --- 4. Stand up the wgpu Vulkan DMABUF-capable host ---
     let (_device, _queue, host) = match make_vulkan_host() {
         Some(triple) => triple,
