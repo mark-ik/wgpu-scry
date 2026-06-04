@@ -53,6 +53,8 @@ pub struct WpeProducer {
     pub(super) generation: Arc<AtomicU64>,
     #[cfg(feature = "wpe")]
     pub(super) handles: WpeHandles,
+    #[cfg(feature = "wpe")]
+    pub(super) nav_state: std::rc::Rc<std::cell::RefCell<super::navigation::NavState>>,
 }
 
 /// The single-slot frame channel a producer's render callback writes into.
@@ -117,6 +119,10 @@ impl WpeProducer {
         }
         let main_context = glib::MainContext::default();
         let (webview, view, toplevel) = super::headless::build_producer_view()?;
+        let nav_state = std::rc::Rc::new(std::cell::RefCell::new(
+            super::navigation::NavState::default(),
+        ));
+        super::navigation::install_load_signals(&webview, &nav_state);
         let producer = Self {
             capabilities: super::linux_wpe_capabilities(),
             size: config.size,
@@ -124,6 +130,7 @@ impl WpeProducer {
             pending_frame: Arc::new(Mutex::new(None)),
             generation: Arc::new(AtomicU64::new(0)),
             handles: WpeHandles { webview, view, toplevel, main_context },
+            nav_state,
         };
         // Wire the WPEView frame seam now that the producer (and thus its
         // shared FrameSink) exists. The closure captures a FrameSink clone and
@@ -219,6 +226,52 @@ impl WpeProducer {
     }
 }
 
+#[cfg(feature = "wpe")]
+impl WpeProducer {
+    /// Non-blocking HTML load. Companion `wait_for_load` (or the trait's
+    /// `navigate_to_string`) drives completion.
+    pub fn load_html(&self, html: &str, base_uri: Option<&str>) {
+        use glib::translate::ToGlibPtr;
+        let raw: *mut super::ffi::WebKitWebView =
+            ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.handles.webview).0
+                as *mut _;
+        let c_html = std::ffi::CString::new(html)
+            .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        let c_base = base_uri.and_then(|s| std::ffi::CString::new(s).ok());
+        // SAFETY: `raw` is borrowed from the owned `webview`; load_html copies
+        // both strings before returning.
+        unsafe {
+            super::ffi::webkit_web_view_load_html(
+                raw,
+                c_html.as_ptr(),
+                c_base.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null()),
+            );
+        }
+    }
+
+    /// Non-blocking URI load. Companion `wait_for_load` (or the trait's
+    /// `navigate_to_url`) drives completion.
+    pub fn load_uri(&self, uri: &str) {
+        use glib::translate::ToGlibPtr;
+        let raw: *mut super::ffi::WebKitWebView =
+            ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.handles.webview).0
+                as *mut _;
+        let c_uri = std::ffi::CString::new(uri)
+            .unwrap_or_else(|_| std::ffi::CString::new("about:blank").unwrap());
+        // SAFETY: raw borrowed; load_uri copies the string before returning.
+        unsafe { super::ffi::webkit_web_view_load_uri(raw, c_uri.as_ptr()); }
+    }
+
+    /// Pump the producer's main context until the most recent navigation
+    /// finishes or `timeout` elapses.
+    pub fn wait_for_load(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<(), crate::WebSurfaceError> {
+        super::navigation::wait_for_load(&self.handles.main_context, &self.nav_state, timeout)
+    }
+}
+
 impl Drop for WpeProducer {
     fn drop(&mut self) {
         // Close fds on any frame that was queued but never handed to the
@@ -255,12 +308,38 @@ impl WebSurfaceProducer for WpeProducer {
 
     fn navigate_to_string(
         &mut self,
-        _html: &str,
-        _timeout: std::time::Duration,
+        html: &str,
+        timeout: std::time::Duration,
     ) -> Result<(), WebSurfaceError> {
-        Err(WebSurfaceError::Unsupported(
-            "WpeProducer::navigate_to_string is waiting on the WPE WebKit FFI bridge",
-        ))
+        #[cfg(feature = "wpe")] {
+            super::navigation::arm_navigation(&self.nav_state);
+            self.load_html(html, None);
+            self.wait_for_load(timeout)
+        }
+        #[cfg(not(feature = "wpe"))] {
+            let _ = (html, timeout);
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
+        }
+    }
+
+    fn navigate_to_url(
+        &mut self,
+        url: &str,
+        timeout: std::time::Duration,
+    ) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")] {
+            super::navigation::arm_navigation(&self.nav_state);
+            self.load_uri(url);
+            self.wait_for_load(timeout)
+        }
+        #[cfg(not(feature = "wpe"))] {
+            let _ = (url, timeout);
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
+        }
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) -> Result<(), WebSurfaceError> {
@@ -270,6 +349,24 @@ impl WebSurfaceProducer for WpeProducer {
                 size.width, size.height
             )));
         }
+        #[cfg(feature = "wpe")] {
+            // SAFETY: handles.toplevel is non-null per the construction guard
+            // in build_producer_view; transfer-none borrow, valid for the
+            // view's (and producer's) lifetime.
+            let ok = unsafe {
+                super::ffi::wpe_toplevel_resize(
+                    self.handles.toplevel,
+                    size.width as std::os::raw::c_int,
+                    size.height as std::os::raw::c_int,
+                )
+            };
+            if ok == 0 {
+                return Err(WebSurfaceError::Platform(
+                    format!("wpe_toplevel_resize returned FALSE for {}x{}",
+                            size.width, size.height),
+                ));
+            }
+        }
         self.size = size;
         Ok(())
     }
@@ -277,6 +374,13 @@ impl WebSurfaceProducer for WpeProducer {
     fn set_offset(&mut self, x: f32, y: f32) -> Result<(), WebSurfaceError> {
         self.offset = (x, y);
         Ok(())
+    }
+
+    fn poll_navigation_event(&mut self) -> Option<crate::NavigationEvent> {
+        #[cfg(feature = "wpe")] {
+            self.nav_state.borrow_mut().events.pop_front()
+        }
+        #[cfg(not(feature = "wpe"))] { None }
     }
 }
 

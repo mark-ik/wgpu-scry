@@ -14,6 +14,10 @@ use crate::{NavigationEvent, WebSurfaceError};
 /// `WebKitLoadEvent` from `/usr/include/wpe-webkit-2.0/wpe/WebKitWebView.h`
 /// (the int values land in the glib closure as `i32`).
 pub(super) const WEBKIT_LOAD_STARTED: i32 = 0;
+/// Redirected fires between Started and Committed; scrying doesn't surface
+/// a NavigationEvent for it, but the constant is exercised by a unit test
+/// asserting the no-op match arm. Kept named for parity with the C header.
+#[allow(dead_code)]
 pub(super) const WEBKIT_LOAD_REDIRECTED: i32 = 1;
 pub(super) const WEBKIT_LOAD_COMMITTED: i32 = 2;
 pub(super) const WEBKIT_LOAD_FINISHED: i32 = 3;
@@ -74,28 +78,55 @@ use glib::prelude::*;
 /// routing into `state`. The closures run on the producer's main context
 /// thread (model A). They capture only `Rc<RefCell<NavState>>` clones — no
 /// `&mut self`-like borrows survive into the closure body.
+///
+/// Implementation note: `WebKitLoadEvent` arrives in the closure as the
+/// GObject enum type, NOT as `gint`, so `glib::closure_local!(... event:
+/// i32 ...)` fails its arg-type check. We hand-roll a `RustClosure` over
+/// `&[glib::Value]` and pull the enum out via `value.get::<i32>()` —
+/// glib's value transform tables include enum→gint, which works here.
 pub(super) fn install_load_signals(webview: &glib::Object, state: &Rc<RefCell<NavState>>) {
     {
         let s = state.clone();
-        webview.connect_closure(
-            "load-changed",
-            false,
-            glib::closure_local!(move |view: glib::Object, event: i32| {
-                let uri = view
-                    .property::<String>("uri");
-                s.borrow_mut().on_load_changed(event, uri);
-            }),
-        );
+        let closure = glib::RustClosure::new_local(move |values| {
+            // values: [view: GObject, event: WebKitLoadEvent]
+            let view = values[0]
+                .get::<glib::Object>()
+                .expect("load-changed: arg 0 must be GObject");
+            let event = values[1]
+                .get::<i32>()
+                .unwrap_or_else(|_| {
+                    // Fallback: read raw enum value through transform.
+                    values[1]
+                        .transform::<i32>()
+                        .ok()
+                        .and_then(|v| v.get::<i32>().ok())
+                        .unwrap_or(-1)
+                });
+            let uri = view.property::<String>("uri");
+            s.borrow_mut().on_load_changed(event, uri);
+            None
+        });
+        webview.connect_closure("load-changed", false, closure);
     }
     {
         let s = state.clone();
-        webview.connect_closure(
-            "load-failed",
-            false,
-            glib::closure_local!(move |_view: glib::Object, _event: i32, failing_uri: String, error: glib::Error| {
-                s.borrow_mut().on_load_failed(failing_uri, error.message().to_string());
-            }),
-        );
+        let closure = glib::RustClosure::new_local(move |values| {
+            // values: [view, event, failing_uri: &str, error: GError]
+            let failing_uri = values
+                .get(2)
+                .and_then(|v| v.get::<String>().ok())
+                .unwrap_or_default();
+            let err_msg = values
+                .get(3)
+                .and_then(|v| v.get::<glib::Error>().ok())
+                .map(|e| e.message().to_string())
+                .unwrap_or_else(|| "(error message unavailable)".to_string());
+            s.borrow_mut().on_load_failed(failing_uri, err_msg);
+            // load-failed expects a gboolean return (FALSE = let WebKit
+            // show its default error page).
+            Some(false.to_value())
+        });
+        webview.connect_closure("load-failed", false, closure);
     }
 }
 
