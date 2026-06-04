@@ -143,11 +143,17 @@ fn wpe_to_vulkan_round_trip() {
         Err(e) => {
             panic!(
                 "FAIL: import_frame errored on real WPE buffer: {e}\n\n\
-                 This is the actionable signal: Phase 4a's importer is single-plane \
-                 (reads planes[0]) but WPE on this hardware exports a multi-plane \
-                 DCC-tiled buffer. The fix is multi-plane DRM-modifier import in \
-                 native_frame/dmabuf.rs — see the 4c.2 retrospective and the \
-                 2026-06-04 round-trip spec for context."
+                 This is the actionable signal: Phase 4a's importer at \
+                 native_frame/dmabuf.rs:69-83 EXPLICITLY DEFERS frame.planes.len() > 1 \
+                 with NativeImportNotYetImplemented. WPE on AMD/Mesa-RADV emits a \
+                 2-plane DCC-tiled BGRA buffer (single sampleable image + DCC aux \
+                 metadata plane) — this is the RGBA-with-aux multi-plane case, \
+                 DISTINCT from the YUV ycbcr-conversion case the existing comment \
+                 there discusses. The fix is to extend dmabuf::import to feed \
+                 per-plane VkImageDrmFormatModifierExplicitCreateInfoEXT plane \
+                 layouts + chained VkBindImagePlaneMemoryInfo for non-YUV \
+                 multi-plane modifiers. See 4c.2 retrospective + 2026-06-04 \
+                 round-trip spec for context."
             );
         }
     };
