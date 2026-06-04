@@ -59,6 +59,14 @@ pub const WPE_MODIFIER_KEYBOARD_ALT: u32 = 1 << 2;
 pub const WPE_MODIFIER_KEYBOARD_META: u32 = 1 << 3;
 pub const WPE_MODIFIER_KEYBOARD_CAPS_LOCK: u32 = 1 << 4;
 
+// WPEInputSource enum discriminants — verified against
+// /usr/include/wpe-webkit-2.0/wpe-platform/wpe/WPEEvent.h. The C enum is
+// zero-based in declaration order. Every wpe_event_*_new constructor
+// takes a `WPEInputSource source` as its third argument.
+pub const WPE_INPUT_SOURCE_MOUSE: i32 = 0;
+pub const WPE_INPUT_SOURCE_PEN: i32 = 1;
+pub const WPE_INPUT_SOURCE_KEYBOARD: i32 = 2;
+
 unsafe extern "C" {
     // WPEPlatform headless display constructor — the self-owned display the
     // producer renders into (no compositor surface).
@@ -108,9 +116,15 @@ unsafe extern "C" {
     pub fn webkit_web_view_load_uri(view: *mut WebKitWebView, uri: *const c_char);
 
     // --- Input event construction + dispatch (4c.4) ---
+    // Signatures verified against
+    // /usr/include/wpe-webkit-2.0/wpe-platform/wpe/WPEEvent.h. Every
+    // constructor takes a `WPEInputSource source` as its third argument.
+    // Argument order matches the C declarations exactly (Rust's C ABI
+    // is positional — order is load-bearing, not just types).
     pub fn wpe_event_keyboard_new(
         ty: i32,
         view: *mut WPEView,
+        source: i32,
         time: u32,
         modifiers: u32,
         keycode: u32,
@@ -119,16 +133,18 @@ unsafe extern "C" {
     pub fn wpe_event_pointer_button_new(
         ty: i32,
         view: *mut WPEView,
+        source: i32,
         time: u32,
         modifiers: u32,
+        button: u32,
         x: f64,
         y: f64,
-        button: u32,
         press_count: u32,
     ) -> *mut WPEEvent;
     pub fn wpe_event_pointer_move_new(
         ty: i32,
         view: *mut WPEView,
+        source: i32,
         time: u32,
         modifiers: u32,
         x: f64,
@@ -138,6 +154,7 @@ unsafe extern "C" {
     ) -> *mut WPEEvent;
     pub fn wpe_event_scroll_new(
         view: *mut WPEView,
+        source: i32,
         time: u32,
         modifiers: u32,
         dx: f64,

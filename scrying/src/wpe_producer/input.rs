@@ -134,7 +134,11 @@ pub(super) unsafe fn dispatch_keyboard(view: *mut ffi::WPEView, ev: &KeyboardInp
     let keycode = ev.virtual_key_code;
     let keyval: u32 = 0;
     let modifiers = modifier_flags(ev.modifiers);
-    let evt = unsafe { ffi::wpe_event_keyboard_new(ty, view, 0, modifiers, keycode, keyval) };
+    let evt = unsafe {
+        ffi::wpe_event_keyboard_new(
+            ty, view, ffi::WPE_INPUT_SOURCE_KEYBOARD, 0, modifiers, keycode, keyval,
+        )
+    };
     if !evt.is_null() {
         unsafe { ffi::wpe_view_event(view, evt) };
     }
@@ -148,7 +152,16 @@ pub(super) unsafe fn dispatch_mouse(view: *mut ffi::WPEView, ev: &MouseInput) {
             let (dx, dy) = wheel_deltas(ev);
             let evt = unsafe {
                 ffi::wpe_event_scroll_new(
-                    view, 0, 0, dx, dy, 0 /* not precise */, 0 /* not stop */, x, y,
+                    view,
+                    ffi::WPE_INPUT_SOURCE_MOUSE,
+                    0, // time
+                    0, // modifiers
+                    dx,
+                    dy,
+                    0, // not precise
+                    0, // not stop
+                    x,
+                    y,
                 )
             };
             if !evt.is_null() {
@@ -158,7 +171,15 @@ pub(super) unsafe fn dispatch_mouse(view: *mut ffi::WPEView, ev: &MouseInput) {
         MouseEventKind::Move => {
             let evt = unsafe {
                 ffi::wpe_event_pointer_move_new(
-                    ffi::WPE_EVENT_POINTER_MOVE, view, 0, 0, x, y, 0.0, 0.0,
+                    ffi::WPE_EVENT_POINTER_MOVE,
+                    view,
+                    ffi::WPE_INPUT_SOURCE_MOUSE,
+                    0, // time
+                    0, // modifiers
+                    x,
+                    y,
+                    0.0, // delta_x
+                    0.0, // delta_y
                 )
             };
             if !evt.is_null() {
@@ -174,7 +195,17 @@ pub(super) unsafe fn dispatch_mouse(view: *mut ffi::WPEView, ev: &MouseInput) {
                 };
                 let press_count = mouse_press_count(kind);
                 let evt = unsafe {
-                    ffi::wpe_event_pointer_button_new(ty, view, 0, 0, x, y, button, press_count)
+                    ffi::wpe_event_pointer_button_new(
+                        ty,
+                        view,
+                        ffi::WPE_INPUT_SOURCE_MOUSE,
+                        0, // time
+                        0, // modifiers
+                        button,
+                        x,
+                        y,
+                        press_count,
+                    )
                 };
                 if !evt.is_null() {
                     unsafe { ffi::wpe_view_event(view, evt) };
@@ -200,13 +231,20 @@ pub(super) unsafe fn dispatch_pointer(
     let Some((ty, is_move)) = pointer_kind_to_wpe(ev.kind) else {
         return Ok(()); // Enter/Leave/CaptureChanged silently no-op
     };
+    let source = match ev.device {
+        PointerDevice::Pen => ffi::WPE_INPUT_SOURCE_PEN,
+        // Touch is rejected above; Mouse is the remaining case.
+        _ => ffi::WPE_INPUT_SOURCE_MOUSE,
+    };
     let evt = if is_move {
-        unsafe { ffi::wpe_event_pointer_move_new(ty, view, 0, 0, x, y, 0.0, 0.0) }
+        unsafe { ffi::wpe_event_pointer_move_new(ty, view, source, 0, 0, x, y, 0.0, 0.0) }
     } else {
         // Button 1 (left) for Activate/Down; Up uses the same button id.
         // Press count: 1 for Down/Activate, 0 for Up.
         let press_count = if ty == ffi::WPE_EVENT_POINTER_DOWN { 1 } else { 0 };
-        unsafe { ffi::wpe_event_pointer_button_new(ty, view, 0, 0, x, y, 1, press_count) }
+        unsafe {
+            ffi::wpe_event_pointer_button_new(ty, view, source, 0, 0, 1, x, y, press_count)
+        }
     };
     if !evt.is_null() {
         unsafe { ffi::wpe_view_event(view, evt) };
