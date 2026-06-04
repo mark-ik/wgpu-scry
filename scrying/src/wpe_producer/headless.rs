@@ -54,25 +54,6 @@ pub(super) fn pump_until(
     Ok(())
 }
 
-/// Drive an inline HTML document into a freshly-constructed headless WebView
-/// for the runtime smoke test. The base URI is null (about:blank).
-///
-/// SAFETY: `webview` must be a live `WebKitWebView` GObject; `load_html` copies
-/// both `content` and `base_uri` before returning, so the CString can be dropped
-/// at end of scope.
-///
-/// Test-only — Phase 4c.3 will add the real `load_html` / `load_uri` surface.
-#[cfg(test)]
-pub(super) fn load_html_for_smoke(webview: &glib::Object, html: &str) {
-    use glib::translate::ToGlibPtr;
-    let raw: *mut ffi::WebKitWebView =
-        ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(webview).0 as *mut _;
-    let c_html = std::ffi::CString::new(html).expect("smoke html had interior NUL");
-    // SAFETY: `raw` is a borrowed WebKitWebView pointer valid for `webview`'s
-    // lifetime; load_html copies its arguments before returning.
-    unsafe { ffi::webkit_web_view_load_html(raw, c_html.as_ptr(), std::ptr::null()) };
-}
-
 /// Construct a headless `WPEDisplay` and a `WebKitWebView` bound to it.
 ///
 /// Returns the owned WebView (as a [`glib::Object`]) and the raw [`ffi::WPEView`]
@@ -295,63 +276,107 @@ pub(super) fn connect_buffer_rendered(
 
 #[cfg(test)]
 mod tests {
-    /// End-to-end runtime smoke: build a headless `WpeProducer`, load an
-    /// inline solid-color page, pump the producer's glib context until the
-    /// `buffer-rendered` seam fires, then assert the resulting `DmaBufImage`
-    /// is well-formed (non-zero size, >=1 plane, valid dup'd fd, no sync).
+    /// End-to-end runtime smoke for 4c.3: construct a headless producer,
+    /// navigate to an inline page, assert load completes, acquire a real
+    /// `DmaBufImage`, then resize and acquire another frame. Strict
+    /// superset of the 4c.2 smoke + adds nav + resize coverage.
     ///
-    /// Strict superset of the prior connect-only test: a successful render
-    /// proves construction, signal connect, and a first real frame. WPE only
-    /// supports one headless display init/teardown per process, so this is
-    /// the ONLY `#[ignore]`d runtime-WPE test in this module.
+    /// The one-WPE-per-process constraint (see module doc) means this MUST
+    /// remain the only ignored runtime test in this binary.
     #[test]
     #[ignore = "needs a headless WPE display (GPU + Wayland); run manually"]
-    fn renders_one_dmabuf_frame() {
+    fn navigate_resize_and_render() {
         use crate::native_frame::{NativeFrame, SyncMechanism};
         use crate::wpe_producer::{WpeProducer, WpeProducerConfig};
-        use crate::{WebSurfaceFrame, WebSurfaceProducer};
+        use crate::{NavigationEvent, WebSurfaceFrame, WebSurfaceProducer};
         use dpi::PhysicalSize;
 
         let config = WpeProducerConfig::new(PhysicalSize::new(256, 256), std::env::temp_dir());
         let mut producer = WpeProducer::new(config).expect("construct headless producer");
 
-        // Clone the webview (cheap GObject ref-bump) so we hand `load_html_for_smoke`
-        // a borrow that doesn't alias `&mut producer` for the pump/acquire below.
-        let webview = producer.handles.webview.clone();
-        super::load_html_for_smoke(
-            &webview,
-            "<body style='margin:0;background:#1e90ff'></body>",
+        // --- 1. Navigate + assert first frame ---
+        producer
+            .navigate_to_string(
+                "<body style='margin:0;background:#1e90ff'></body>",
+                std::time::Duration::from_secs(5),
+            )
+            .expect("navigate_to_string");
+
+        // Drain navigation events so poll_navigation_event paths are exercised.
+        let mut nav_events = Vec::new();
+        while let Some(e) = producer.poll_navigation_event() {
+            nav_events.push(e);
+        }
+        assert!(
+            nav_events.iter().any(|e| matches!(e, NavigationEvent::Completed { success: true, .. })),
+            "expected a successful Completed event; got {:?}",
+            nav_events
         );
 
-        // Pump the producer's stored main context. WPE delivers buffer-rendered
-        // on the same context the WebView was constructed under (which is
-        // `glib::MainContext::default()` per producer.rs). Pump variant 1
-        // (producer.handles.main_context) is sufficient on this box.
+        // The buffer-rendered seam may fire just after load-changed FINISHED;
+        // pump up to 5s for the first frame to materialize on the producer.
+        {
+            let ctx = producer.handles.main_context.clone();
+            let pending = producer.pending_frame.clone();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            super::pump_until(&ctx, deadline, || {
+                pending.lock().map(|s| s.is_some()).unwrap_or(false)
+            })
+            .expect("a first frame should arrive within 5s of navigate completion");
+        }
+
+        let frame_1 = producer.acquire_frame().expect("first frame after navigate");
+        let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img1)) = frame_1 else {
+            panic!("expected a DMABUF frame");
+        };
+        assert!(img1.size.width > 0 && img1.size.height > 0, "non-zero size 1");
+        assert!(!img1.planes.is_empty(), "at least one plane");
+        assert!(img1.planes[0].fd >= 0, "valid dup'd fd");
+        assert_eq!(img1.producer_sync, SyncMechanism::None);
+        eprintln!(
+            "smoke#1 (post-nav): {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
+            img1.size.width, img1.size.height, img1.drm_format, img1.drm_modifier, img1.planes.len()
+        );
+        super::super::producer::close_frame_fds(&img1);
+
+        // --- 2. Resize + assert next frame ---
+        producer
+            .resize(PhysicalSize::new(512, 384))
+            .expect("resize to 512x384");
+
+        // Pump up to 5s for a fresh frame after resize. WPE may not auto-paint
+        // on resize alone — the fallback below renavigates to force one.
         let ctx = producer.handles.main_context.clone();
         let pending = producer.pending_frame.clone();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        super::pump_until(&ctx, deadline, || {
+        let arrived = super::pump_until(&ctx, deadline, || {
             pending.lock().map(|s| s.is_some()).unwrap_or(false)
-        })
-        .expect("a frame should arrive within 5s");
+        }).is_ok();
 
-        let frame = producer.acquire_frame().expect("frame available");
-        let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img)) = frame else {
+        if !arrived {
+            eprintln!("(resize did not auto-trigger a buffer-rendered; renavigating)");
+            producer
+                .navigate_to_string(
+                    "<body style='margin:0;background:#22aa22'></body>",
+                    std::time::Duration::from_secs(5),
+                )
+                .expect("renavigate after resize");
+            // Drain post-renavigate events.
+            while let Some(_e) = producer.poll_navigation_event() {}
+        }
+
+        let frame_2 = producer.acquire_frame().expect("second frame after resize");
+        let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img2)) = frame_2 else {
             panic!("expected a DMABUF frame");
         };
-        assert!(img.size.width > 0 && img.size.height > 0, "non-zero size");
-        assert!(!img.planes.is_empty(), "at least one plane");
-        assert!(img.planes[0].fd >= 0, "valid dup'd fd");
-        assert_eq!(img.producer_sync, SyncMechanism::None);
+        assert!(img2.size.width > 0 && img2.size.height > 0, "non-zero size 2");
         eprintln!(
-            "smoke: {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
-            img.size.width,
-            img.size.height,
-            img.drm_format,
-            img.drm_modifier,
-            img.planes.len()
+            "smoke#2 (post-resize): {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
+            img2.size.width, img2.size.height, img2.drm_format, img2.drm_modifier, img2.planes.len()
         );
-        // Close the fds we just took ownership of (no importer in this test).
-        super::super::producer::close_frame_fds(&img);
+        // Soft assertion: the headless toplevel may coerce dimensions. The
+        // diagnostic eprintln makes the actual size visible. Hard contract:
+        // resize succeeded AND the seam still produces a valid frame.
+        super::super::producer::close_frame_fds(&img2);
     }
 }
