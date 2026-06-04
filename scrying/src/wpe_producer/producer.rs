@@ -403,6 +403,46 @@ impl WebSurfaceProducer for WpeProducer {
         }
         #[cfg(not(feature = "wpe"))] { None }
     }
+
+    fn send_keyboard_input(&mut self, event: crate::KeyboardInput) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")] {
+            // SAFETY: handles.view is non-null per the construction guard;
+            // dispatch_keyboard is single-threaded on the producer's thread.
+            unsafe { super::input::dispatch_keyboard(self.handles.view, &event); }
+            Ok(())
+        }
+        #[cfg(not(feature = "wpe"))] {
+            let _ = event;
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
+        }
+    }
+
+    fn send_mouse_input(&mut self, event: crate::MouseInput) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")] {
+            unsafe { super::input::dispatch_mouse(self.handles.view, &event); }
+            Ok(())
+        }
+        #[cfg(not(feature = "wpe"))] {
+            let _ = event;
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
+        }
+    }
+
+    fn send_pointer_input(&mut self, event: crate::PointerInput) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")] {
+            unsafe { super::input::dispatch_pointer(self.handles.view, &event) }
+        }
+        #[cfg(not(feature = "wpe"))] {
+            let _ = event;
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
