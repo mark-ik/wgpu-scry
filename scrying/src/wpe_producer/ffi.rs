@@ -35,6 +35,29 @@ pub struct WebKitNetworkSession {
 pub struct WPEToplevel {
     _opaque: [u8; 0],
 }
+#[repr(C)]
+pub struct WPEEvent {
+    _opaque: [u8; 0],
+}
+
+// WPEEventType discriminants — verified against
+// /usr/include/wpe-webkit-2.0/wpe-platform/wpe/WPEEvent.h. The C enum
+// is zero-based in declaration order.
+pub const WPE_EVENT_POINTER_DOWN: i32 = 1;
+pub const WPE_EVENT_POINTER_UP: i32 = 2;
+pub const WPE_EVENT_POINTER_MOVE: i32 = 3;
+pub const WPE_EVENT_SCROLL: i32 = 6;
+pub const WPE_EVENT_KEYBOARD_KEY_DOWN: i32 = 7;
+pub const WPE_EVENT_KEYBOARD_KEY_UP: i32 = 8;
+
+// WPEModifiers bitmask flags — verified against the same header.
+// Pointer-button modifier bits exist (1<<5..1<<9) but are not used by
+// the MVP, so we don't bind them yet.
+pub const WPE_MODIFIER_KEYBOARD_CONTROL: u32 = 1 << 0;
+pub const WPE_MODIFIER_KEYBOARD_SHIFT: u32 = 1 << 1;
+pub const WPE_MODIFIER_KEYBOARD_ALT: u32 = 1 << 2;
+pub const WPE_MODIFIER_KEYBOARD_META: u32 = 1 << 3;
+pub const WPE_MODIFIER_KEYBOARD_CAPS_LOCK: u32 = 1 << 4;
 
 unsafe extern "C" {
     // WPEPlatform headless display constructor — the self-owned display the
@@ -83,4 +106,46 @@ unsafe extern "C" {
     );
 
     pub fn webkit_web_view_load_uri(view: *mut WebKitWebView, uri: *const c_char);
+
+    // --- Input event construction + dispatch (4c.4) ---
+    pub fn wpe_event_keyboard_new(
+        ty: i32,
+        view: *mut WPEView,
+        time: u32,
+        modifiers: u32,
+        keycode: u32,
+        keyval: u32,
+    ) -> *mut WPEEvent;
+    pub fn wpe_event_pointer_button_new(
+        ty: i32,
+        view: *mut WPEView,
+        time: u32,
+        modifiers: u32,
+        x: f64,
+        y: f64,
+        button: u32,
+        press_count: u32,
+    ) -> *mut WPEEvent;
+    pub fn wpe_event_pointer_move_new(
+        ty: i32,
+        view: *mut WPEView,
+        time: u32,
+        modifiers: u32,
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+    ) -> *mut WPEEvent;
+    pub fn wpe_event_scroll_new(
+        view: *mut WPEView,
+        time: u32,
+        modifiers: u32,
+        dx: f64,
+        dy: f64,
+        has_precise_deltas: i32,
+        is_stop: i32,
+        x: f64,
+        y: f64,
+    ) -> *mut WPEEvent;
+    pub fn wpe_view_event(view: *mut WPEView, event: *mut WPEEvent);
 }
