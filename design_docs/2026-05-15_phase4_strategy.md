@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4b.1 + 4c.1 + 4c.2 + 4c.3 shipped; 4c.4+ in flight.
+**Status:** 4a + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 shipped; 4c.4.x / 4c.5+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -362,9 +362,30 @@ artifact.
       no-op on headless; honoring requested size needs additional WPE
       API (likely `wpe_view_resized` or toplevel-state changes), tracked
       for 4c.4+.
-- [ ] **4c.4** Input forwarding via `wpe_view_event(WPEEvent*)` —
-      keyboard / pointer / scroll / touch / IME. WPEPlatform path, not
-      legacy libwpe.
+- [x] **4c.4** Input forwarding MVP — keyboard + mouse-pointer +
+      scroll via `wpe_view_event(WPEEvent*)`. Real
+      `send_keyboard_input` / `send_mouse_input` / `send_pointer_input`
+      trait impls under `--features wpe`; pure-Rust unit tests cover
+      the scrying-input → WPEEvent translation; runtime integration
+      smoke `tests/wpe_input.rs` (independent binary) verifies dispatch
+      doesn't crash. Spec
+      [`2026-06-04_phase4c4_input_mvp.md`](2026-06-04_phase4c4_input_mvp.md),
+      plan [`2026-06-04_phase4c4_implementation_plan.md`](2026-06-04_phase4c4_implementation_plan.md).
+      MVP punts keyval derivation (uses 0; WebKit derives from
+      keycode), event timestamps (always 0), touch input, drag input,
+      and IME composition to 4c.4.x sub-phases or 4c.5. Empirical
+      finding: the first runtime smoke surfaced a real FFI-signature
+      bug — the four `wpe_event_*_new` constructors all take a
+      `WPEInputSource` as their third arg with a specific param order
+      that disagreed with the plan's signatures. Fixed; the smoke now
+      runs without any GLib CRITICAL.
+- [ ] **4c.4.1** Touch input via `wpe_event_touch_new` + sequence-id
+      mapping (PointerInput.device == Touch).
+- [ ] **4c.4.2** Drag input — investigate whether WPE exposes a
+      drag-and-drop signal surface or whether HTML5 DOM events need
+      JS-bridge injection.
+- [ ] **4c.4.3** IME composition via `WPEInputMethodContext` (or the
+      WPE-platform equivalent).
 - [ ] **4c.5** Phase 2b–2e surface ported from
       `webkitgtk_producer/` (cookies, schemes, popups, downloads,
       cursor, IME state).
