@@ -103,17 +103,24 @@ pub(super) fn import(
     if frame.planes.is_empty() {
         return Err(InteropError::InvalidFrame("DmaBufImage has no planes"));
     }
-    if frame.planes.len() > 1 {
-        // Multi-plane DMABUFs are deferred. In practice they mean YUV
-        // (NV12 / P010 / YUV420), which needs a multi-planar VkFormat
-        // plus a Vulkan sampler ycbcr conversion to sample — and wgpu
-        // 29 doesn't cleanly expose ycbcr conversion, so we couldn't
-        // hand back a sampleable wgpu::Texture even if we imported the
-        // VkImage. Our actual producer (WebKit's offscreen page
-        // surface) is single-plane BGRA, so this stays unimplemented
-        // until a producer emits multi-plane frames we can consume.
-        // (Explicit-modifier RGBA with compression aux planes is the
-        // one non-YUV multi-plane case; it's rare and also deferred.)
+    // Multi-plane DMABUFs come in two shapes on Linux:
+    //
+    //   (a) "Shared-fd multi-plane": all plane fds are dup's of a
+    //       single kernel DMABUF, distinguished by per-plane offsets.
+    //       Mesa-RADV emits this for DCC-compressed RGBA: plane 0 is
+    //       the color data, plane 1 is the DCC aux metadata, both in
+    //       one underlying buffer. We import one VkDeviceMemory; the
+    //       multi-plane layout is communicated via per-plane entries
+    //       in `VkImageDrmFormatModifierExplicitCreateInfoEXT::pPlaneLayouts`.
+    //
+    //   (b) "Disjoint multi-plane": each plane has its own kernel
+    //       DMABUF (different st_ino). This is the YUV ycbcr-style
+    //       shape (and also possible for explicit-disjoint RGBA).
+    //       Vulkan needs `VK_IMAGE_CREATE_DISJOINT_BIT` + N separate
+    //       VkDeviceMemory imports + per-plane VkBindImagePlaneMemoryInfo
+    //       chained binds — wgpu 29 also can't represent the YUV
+    //       sampler-conversion path cleanly. Deferred.
+    if frame.planes.len() > 1 && !planes_share_kernel_object(&frame.planes) {
         return Err(InteropError::Unsupported(
             UnsupportedReason::NativeImportNotYetImplemented,
         ));
@@ -160,13 +167,18 @@ pub(super) fn import(
         let raw_device: &ash::Device = hal_device.raw_device();
 
         // ---- 1. Build VkImage with DMABUF + DRM-modifier chain ----
-        let plane_layouts = [vk::SubresourceLayout {
-            offset: frame.planes[0].offset as u64,
-            size: 0, // implementation-defined; ignored for DMABUFs
-            row_pitch: frame.planes[0].stride as u64,
-            array_pitch: 0,
-            depth_pitch: 0,
-        }];
+        // Multi-plane shared-fd: provide one SubresourceLayout entry
+        // per plane so the driver can find each plane's data within
+        // the single VkDeviceMemory we'll import below.
+        let plane_layouts: Vec<vk::SubresourceLayout> = frame.planes.iter()
+            .map(|p| vk::SubresourceLayout {
+                offset: p.offset as u64,
+                size: 0, // implementation-defined; ignored for DMABUFs
+                row_pitch: p.stride as u64,
+                array_pitch: 0,
+                depth_pitch: 0,
+            })
+            .collect();
 
         let mut drm_modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
             .drm_format_modifier(effective_modifier)
@@ -234,6 +246,22 @@ pub(super) fn import(
             raw_device.free_memory(vk_memory, None);
             raw_device.destroy_image(vk_image, None);
             return Err(InteropError::Vulkan(format!("vkBindImageMemory: {e}")));
+        }
+
+        // All planes share one kernel DMABUF (guaranteed by the
+        // `planes_share_kernel_object` check above). Vulkan now owns
+        // the kernel ref via planes[0].fd (transferred on the
+        // allocate_memory success above). The remaining plane fds are
+        // redundant dup's that we close to avoid an fd-table leak;
+        // they don't carry any layout information of their own (the
+        // per-plane offsets/strides went through plane_layouts).
+        for plane in &frame.planes[1..] {
+            // SAFETY: producer-allocated dup'd fd that we know
+            // references the same kernel object as planes[0].fd (which
+            // Vulkan now owns). Closing this fd does not free the
+            // underlying buffer. (Already inside the outer `unsafe`
+            // block opened at the top of the import body.)
+            libc::close(plane.fd);
         }
 
         // ---- 4. Wrap as wgpu_hal::vulkan::Texture ----
