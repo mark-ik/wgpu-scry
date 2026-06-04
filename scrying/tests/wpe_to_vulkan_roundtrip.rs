@@ -20,8 +20,8 @@
 use dpi::PhysicalSize;
 use scrying::wpe_producer::{WpeProducer, WpeProducerConfig};
 use scrying::{
-    DmaBufImage, HostWgpuContext, NativeFrame, NavigationEvent, SyncMechanism, WebSurfaceFrame,
-    WebSurfaceProducer,
+    DmaBufImage, HostWgpuContext, ImportOptions, NativeFrame, NavigationEvent, SyncMechanism,
+    TextureImporter, WebSurfaceFrame, WebSurfaceProducer, WgpuTextureImporter,
 };
 
 #[test]
@@ -101,26 +101,72 @@ fn wpe_to_vulkan_round_trip() {
         image.planes.len()
     );
 
-    // --- 4. Stand up the wgpu Vulkan DMABUF-capable host (Task 2). ---
-    let (_device, _queue, _host) = match make_vulkan_host() {
+    // --- 4. Stand up the wgpu Vulkan DMABUF-capable host ---
+    let (_device, _queue, host) = match make_vulkan_host() {
         Some(triple) => triple,
         None => {
             // SKIP message already printed inside make_vulkan_host.
-            // Producer fds must still be closed since the importer never
-            // takes ownership.
+            // Producer fds must still be closed — the importer never
+            // takes ownership on this path.
             close_producer_fds(&image);
             return;
         }
     };
     eprintln!("wpe→vk: wgpu Vulkan host up");
 
-    // --- 5. (Task 3 hands this to the importer; Task 2 closes fds.) ---
-    close_producer_fds(&image);
+    // --- 5. Hand the WPE frame to the importer ---
+    //
+    // EMPIRICAL: on this AMD/Fedora 44 box the headless WPE buffer is
+    // 2-plane AMD-tiled DCC (modifier 0x020000044051ba01). Phase 4a's
+    // importer reads only `planes[0]`. The importer either:
+    //  (a) accepts the modifier + reads only plane 0 → texture imports,
+    //      possibly with visual artifact (pixels are out of scope per
+    //      the round-trip spec).
+    //  (b) rejects the modifier outright → import_frame returns Err.
+    //
+    // On Err: panic with the literal message. The failure IS the
+    // actionable signal that Phase 4a needs multi-plane DRM-modifier
+    // import to handle WPE's real output on AMD. The harness exists
+    // and remains useful when that lands.
+    //
+    // FD OWNERSHIP: import_frame consumes the fds on success. On Err
+    // we don't manually close — matches dmabuf_roundtrip.rs's
+    // behaviour and avoids any double-close risk.
+    let importer = WgpuTextureImporter::new(host);
+    let expected_size = image.size;
+    let expected_format = image.format;
+    let imported = match importer.import_frame(
+        &NativeFrame::DmaBufImage(image),
+        &ImportOptions::default(),
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            panic!(
+                "FAIL: import_frame errored on real WPE buffer: {e}\n\n\
+                 This is the actionable signal: Phase 4a's importer is single-plane \
+                 (reads planes[0]) but WPE on this hardware exports a multi-plane \
+                 DCC-tiled buffer. The fix is multi-plane DRM-modifier import in \
+                 native_frame/dmabuf.rs — see the 4c.2 retrospective and the \
+                 2026-06-04 round-trip spec for context."
+            );
+        }
+    };
+
+    // --- 6. Assert: import returned a wgpu texture of the right shape ---
+    assert_eq!(imported.size.width, expected_size.width, "imported width matches");
+    assert_eq!(imported.size.height, expected_size.height, "imported height matches");
+    assert_eq!(imported.format, expected_format, "imported format matches");
+    eprintln!(
+        "wpe→vk: imported texture {}x{} format={:?} gen={}",
+        imported.size.width, imported.size.height, imported.format, imported.generation
+    );
 }
 
 /// Close producer-owned dup'd fds on a `DmaBufImage` that was never
-/// handed to the importer. Task 3 narrows this to the SKIP branches
-/// once the importer takes ownership on success.
+/// handed to the importer. Used only on the SKIP branch where the
+/// wgpu host couldn't be built — on the import path, `import_frame`
+/// takes ownership of the fds and Vulkan closes them on the imported
+/// texture's drop.
 fn close_producer_fds(image: &DmaBufImage) {
     for plane in &image.planes {
         // SAFETY: producer-owned dup'd fd not yet transferred to the importer.
