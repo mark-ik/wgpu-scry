@@ -443,6 +443,11 @@ impl WebSurfaceProducer for WpeProducer {
             ))
         }
     }
+
+    // `send_drag_input` intentionally falls through to the trait default
+    // (`Err(Unsupported)`); deferred to 4c.4.2. WPE has no first-class drag
+    // event surface — the design will likely route through HTML5 DOM events
+    // injected via the JS message bridge that lands in 4c.5.
 }
 
 #[cfg(test)]

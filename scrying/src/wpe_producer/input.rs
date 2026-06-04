@@ -52,7 +52,9 @@ pub(super) fn is_mouse_down(kind: MouseEventKind) -> bool {
 }
 
 /// `press_count` for `wpe_event_pointer_button_new`: 2 for double-clicks,
-/// 1 for single-click presses, 0 (i.e. unused) for releases.
+/// 1 for single-click presses, 0 for any non-press kind (releases, Move,
+/// Wheel — though Move/Wheel paths use different constructors, so 0 only
+/// ever reaches the button constructor on releases in practice).
 pub(super) fn mouse_press_count(kind: MouseEventKind) -> u32 {
     match kind {
         MouseEventKind::LeftButtonDoubleClick
@@ -84,6 +86,7 @@ pub(super) fn pointer_kind_to_wpe(kind: PointerEventKind) -> Option<(i32, bool)>
     // (wpe-type, is_move)
     match kind {
         PointerEventKind::Update => Some((ffi::WPE_EVENT_POINTER_MOVE, true)),
+        // MVP: WPE has no `Activate` concept; treat the same as `Down`.
         PointerEventKind::Down | PointerEventKind::Activate => {
             Some((ffi::WPE_EVENT_POINTER_DOWN, false))
         }
@@ -107,13 +110,6 @@ fn modifier_flags(m: crate::KeyModifierFlags) -> u32 {
     if m.caps_lock { bits |= ffi::WPE_MODIFIER_KEYBOARD_CAPS_LOCK; }
     bits
 }
-
-/// WPE scroll event type tag — `wpe_event_scroll_new` does not take a
-/// type discriminant parameter (scroll type is implicit in the API), so
-/// this constant is referenced via `_` to keep the symbol table complete
-/// alongside the other WPEEventType values.
-#[allow(dead_code)]
-pub(super) const WPE_SCROLL_TYPE: i32 = ffi::WPE_EVENT_SCROLL;
 
 /// SAFETY: `view` must be a non-null `WPEView*` valid for the current
 /// call. The constructed event is consumed by `wpe_view_event`

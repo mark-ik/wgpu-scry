@@ -46,6 +46,9 @@ pub struct WPEEvent {
 pub const WPE_EVENT_POINTER_DOWN: i32 = 1;
 pub const WPE_EVENT_POINTER_UP: i32 = 2;
 pub const WPE_EVENT_POINTER_MOVE: i32 = 3;
+/// Documented as part of the enum even though `wpe_event_scroll_new`
+/// takes no `WPEEventType` arg (the event implicitly is a scroll).
+#[allow(dead_code)]
 pub const WPE_EVENT_SCROLL: i32 = 6;
 pub const WPE_EVENT_KEYBOARD_KEY_DOWN: i32 = 7;
 pub const WPE_EVENT_KEYBOARD_KEY_UP: i32 = 8;
