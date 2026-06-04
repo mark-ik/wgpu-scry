@@ -31,6 +31,10 @@ pub struct WebKitWebView {
 pub struct WebKitNetworkSession {
     _opaque: [u8; 0],
 }
+#[repr(C)]
+pub struct WPEToplevel {
+    _opaque: [u8; 0],
+}
 
 unsafe extern "C" {
     // WPEPlatform headless display constructor — the self-owned display the
@@ -40,6 +44,11 @@ unsafe extern "C" {
     // WPEView frame lifecycle — release a buffer back to the producer once
     // scrying has finished importing it (used in later tasks).
     pub fn wpe_view_buffer_released(view: *mut WPEView, buffer: *mut WPEBuffer);
+
+    // Toplevel chain — under WPEPlatform the view's render size is set on
+    // its WPEToplevel, not on the view directly.
+    pub fn wpe_view_get_toplevel(view: *mut WPEView) -> *mut WPEToplevel;
+    pub fn wpe_toplevel_resize(t: *mut WPEToplevel, width: c_int, height: c_int) -> c_int; // gboolean
 
     // Generic WPEBuffer geometry.
     pub fn wpe_buffer_get_width(buffer: *mut WPEBuffer) -> c_int;
@@ -65,15 +74,13 @@ unsafe extern "C" {
     pub fn webkit_web_view_get_wpe_view(web_view: *mut WebKitWebView) -> *mut WPEView;
     pub fn webkit_web_view_get_type() -> GType;
 
-    // Load an in-memory HTML document into the WebView. Both strings are
-    // copied by WebKit before the call returns. `base_uri` may be NULL,
-    // in which case "about:blank" is used.
-    // Currently used only by the smoke test (cfg(test)); promoted to the
-    // public navigation API in Phase 4c.3.
-    #[allow(dead_code)]
+    // Inline HTML load; both strings are copied by WebKit before returning.
+    // `base_uri` may be NULL (treated as "about:blank").
     pub fn webkit_web_view_load_html(
         web_view: *mut WebKitWebView,
         content: *const c_char,
         base_uri: *const c_char,
     );
+
+    pub fn webkit_web_view_load_uri(view: *mut WebKitWebView, uri: *const c_char);
 }
