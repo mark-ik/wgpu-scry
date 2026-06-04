@@ -20,7 +20,8 @@
 use dpi::PhysicalSize;
 use scrying::wpe_producer::{WpeProducer, WpeProducerConfig};
 use scrying::{
-    DmaBufImage, NativeFrame, NavigationEvent, SyncMechanism, WebSurfaceFrame, WebSurfaceProducer,
+    DmaBufImage, HostWgpuContext, NativeFrame, NavigationEvent, SyncMechanism, WebSurfaceFrame,
+    WebSurfaceProducer,
 };
 
 #[test]
@@ -100,7 +101,20 @@ fn wpe_to_vulkan_round_trip() {
         image.planes.len()
     );
 
-    // --- 4. (Task 3 hands this to the importer; Task 1 closes fds.) ---
+    // --- 4. Stand up the wgpu Vulkan DMABUF-capable host (Task 2). ---
+    let (_device, _queue, _host) = match make_vulkan_host() {
+        Some(triple) => triple,
+        None => {
+            // SKIP message already printed inside make_vulkan_host.
+            // Producer fds must still be closed since the importer never
+            // takes ownership.
+            close_producer_fds(&image);
+            return;
+        }
+    };
+    eprintln!("wpe→vk: wgpu Vulkan host up");
+
+    // --- 5. (Task 3 hands this to the importer; Task 2 closes fds.) ---
     close_producer_fds(&image);
 }
 
@@ -115,4 +129,56 @@ fn close_producer_fds(image: &DmaBufImage) {
     if let Some(fd) = image.semaphore_fd {
         unsafe { libc::close(fd); }
     }
+}
+
+fn make_vulkan_host() -> Option<(wgpu::Device, wgpu::Queue, HostWgpuContext)> {
+    // Turn on VK_LAYER_KHRONOS_validation so we catch any calls that
+    // only "work by accident" on permissive Mesa — e.g. feeding a
+    // DRM-modifier pNext chain to vkCreateImage on a device that
+    // hadn't enabled VK_EXT_image_drm_format_modifier. wgpu-hal logs
+    // a warning and proceeds without the layer if it isn't installed,
+    // so this is safe on boxes that lack `vulkan-validation-layers`.
+    // Validation messages route through `log`; run with
+    // `RUST_LOG=wgpu_hal=warn` (or `=info`) to surface them.
+    let flags = wgpu::InstanceFlags::VALIDATION | wgpu::InstanceFlags::DEBUG;
+    eprintln!("wgpu instance flags: {flags:?} (VK_LAYER_KHRONOS_validation requested)");
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        flags,
+        memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+        backend_options: wgpu::BackendOptions::default(),
+        display: None,
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .ok()?;
+
+    // Phase 4a.7 — use the scrying helper that enables
+    // VK_EXT_image_drm_format_modifier + VK_KHR_external_semaphore_fd
+    // at device creation time. Without these, the import path only
+    // works by accident (Mesa permissiveness) and the wait path
+    // SKIPs because the function pointers can't be resolved.
+    let desc = wgpu::DeviceDescriptor {
+        label: Some("wpe_to_vulkan_roundtrip-device"),
+        ..Default::default()
+    };
+    let (device, queue) = match scrying::build_dmabuf_capable_device(&adapter, &desc) {
+        Ok(pair) => pair,
+        Err(scrying::DmaBufDeviceError::MissingExtensions(missing)) => {
+            eprintln!(
+                "SKIP: physical device missing required extensions: {missing:?}; \
+                 falling back is not useful for this test"
+            );
+            return None;
+        }
+        Err(e) => {
+            eprintln!("SKIP: build_dmabuf_capable_device failed: {e}");
+            return None;
+        }
+    };
+    let host = HostWgpuContext::new(device.clone(), queue.clone());
+    Some((device, queue, host))
 }
