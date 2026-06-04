@@ -92,6 +92,12 @@ webkit6 = { version = "0.6", features = ["v2_44"], optional = true }
 # we don't link against libdrm directly in the test code.)
 gbm = "0.18"
 pollster = "0.4"
+# Phase 4c.x — wpe_to_vulkan_roundtrip integration test needs to pump the
+# GLib main context in its acquire-frame retry loop (the buffer-rendered
+# signal fires on that context). `glib` is already a transitive dependency
+# via the `wpe` feature; listing it here makes it directly available to the
+# integration test binary without touching the library's own dependency list.
+glib = { version = "0.18", optional = false }
 
 [build-dependencies]
 pkg-config = "0.3"
