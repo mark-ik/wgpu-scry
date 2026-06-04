@@ -230,7 +230,12 @@ impl WpeProducer {
 impl WpeProducer {
     /// Non-blocking HTML load. Companion `wait_for_load` (or the trait's
     /// `navigate_to_string`) drives completion.
+    ///
+    /// Clears prior `finished`/`failed` state via `arm_navigation` before
+    /// the load, so back-to-back `load_html(...); wait_for_load(...)` works
+    /// the second time too. Mirrors `webkitgtk_producer::Producer::load_html`.
     pub fn load_html(&self, html: &str, base_uri: Option<&str>) {
+        super::navigation::arm_navigation(&self.nav_state);
         use glib::translate::ToGlibPtr;
         let raw: *mut super::ffi::WebKitWebView =
             ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.handles.webview).0
@@ -251,7 +256,11 @@ impl WpeProducer {
 
     /// Non-blocking URI load. Companion `wait_for_load` (or the trait's
     /// `navigate_to_url`) drives completion.
+    ///
+    /// Clears prior `finished`/`failed` state via `arm_navigation` before
+    /// the load. Mirrors `webkitgtk_producer::Producer::load_uri`.
     pub fn load_uri(&self, uri: &str) {
+        super::navigation::arm_navigation(&self.nav_state);
         use glib::translate::ToGlibPtr;
         let raw: *mut super::ffi::WebKitWebView =
             ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.handles.webview).0
@@ -312,7 +321,7 @@ impl WebSurfaceProducer for WpeProducer {
         timeout: std::time::Duration,
     ) -> Result<(), WebSurfaceError> {
         #[cfg(feature = "wpe")] {
-            super::navigation::arm_navigation(&self.nav_state);
+            // `load_html` arms the nav state internally — no double-arm here.
             self.load_html(html, None);
             self.wait_for_load(timeout)
         }
@@ -330,7 +339,7 @@ impl WebSurfaceProducer for WpeProducer {
         timeout: std::time::Duration,
     ) -> Result<(), WebSurfaceError> {
         #[cfg(feature = "wpe")] {
-            super::navigation::arm_navigation(&self.nav_state);
+            // `load_uri` arms the nav state internally — no double-arm here.
             self.load_uri(url);
             self.wait_for_load(timeout)
         }
@@ -342,6 +351,18 @@ impl WebSurfaceProducer for WpeProducer {
         }
     }
 
+    /// Resize the producer's render target.
+    ///
+    /// **NOTE on `self.size`:** this method updates `self.size` to the
+    /// REQUESTED size if `wpe_toplevel_resize` returns TRUE. On the
+    /// headless WPE display in WPE 2.52.3, the toplevel silently
+    /// coerces all dimensions to its default (1024×768 in current
+    /// testing) — `wpe_toplevel_resize` still returns TRUE, but the
+    /// next `DmaBufImage` reflects the coerced size, not `self.size`.
+    /// Callers that need the true rendered dimensions should read them
+    /// off the most recent `DmaBufImage::size`, not from this method's
+    /// updated `self.size`. Honoring the requested size on headless
+    /// is tracked for 4c.4+.
     fn resize(&mut self, size: PhysicalSize<u32>) -> Result<(), WebSurfaceError> {
         if size.width == 0 || size.height == 0 {
             return Err(WebSurfaceError::Platform(format!(
