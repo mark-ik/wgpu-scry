@@ -44,7 +44,8 @@ use ash::vk;
 use wgpu::wgc::api::Vulkan;
 
 use super::{
-    DmaBufImage, HostWgpuContext, ImportedTexture, InteropError, SyncMechanism, UnsupportedReason,
+    DmaBufImage, DmaBufPlane, HostWgpuContext, ImportedTexture, InteropError, SyncMechanism,
+    UnsupportedReason,
 };
 
 /// linux/drm_fourcc.h `DRM_FORMAT_MOD_LINEAR` — row-major, no tiling.
@@ -52,6 +53,42 @@ const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 /// linux/drm_fourcc.h `DRM_FORMAT_MOD_INVALID` = `fourcc_mod_code(NONE,
 /// (1<<56)-1)`. Signals "no explicit modifier negotiated".
 const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
+
+/// Returns the inode (`st_ino`) of the kernel object behind `fd`, or
+/// `None` if `fstat` fails. Used by `planes_share_kernel_object` to
+/// decide whether N plane fds reference a single underlying DMABUF
+/// (one VkDeviceMemory import) or genuinely separate kernel buffers
+/// (which would need `DISJOINT_BIT` + per-plane imports — deferred).
+fn fstat_inode(fd: i32) -> Option<u64> {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: fstat is a read-only call against a producer-owned fd.
+    let rc = unsafe { libc::fstat(fd, st.as_mut_ptr()) };
+    if rc == 0 {
+        Some(unsafe { st.assume_init() }.st_ino)
+    } else {
+        None
+    }
+}
+
+/// True iff all plane fds in `planes` map to the same kernel object
+/// (same `st_ino`). The single-plane case is trivially true. On any
+/// fstat failure, returns false (conservatively treat as disjoint).
+///
+/// Mesa-RADV's DCC-compressed RGBA exports emit N dup'd fds all
+/// pointing at the same underlying DMABUF — that's the case this
+/// importer's multi-plane path supports. Different inodes imply
+/// genuinely separate kernel buffers requiring DISJOINT_BIT +
+/// per-plane memory bindings; that path is deferred.
+fn planes_share_kernel_object(planes: &[DmaBufPlane]) -> bool {
+    if planes.len() <= 1 {
+        return true;
+    }
+    let first_ino = match fstat_inode(planes[0].fd) {
+        Some(ino) => ino,
+        None => return false,
+    };
+    planes[1..].iter().all(|p| fstat_inode(p.fd) == Some(first_ino))
+}
 
 pub(super) fn import(
     frame: &DmaBufImage,
@@ -546,4 +583,69 @@ pub fn build_dmabuf_capable_device(
     let (device, queue) =
         unsafe { adapter.create_device_from_hal::<Vulkan>(hal_open, desc) }?;
     Ok((device, queue))
+}
+
+#[cfg(test)]
+mod plane_share_tests {
+    use super::*;
+
+    fn make_plane(fd: i32) -> DmaBufPlane {
+        DmaBufPlane { fd, offset: 0, stride: 0 }
+    }
+
+    /// Open a pipe and return the read-end fd.
+    fn open_pipe_read_fd() -> i32 {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe() failed");
+        unsafe { libc::close(fds[1]) }; // close write end
+        fds[0]
+    }
+
+    #[test]
+    fn single_plane_is_always_shared() {
+        let fd = open_pipe_read_fd();
+        let planes = vec![make_plane(fd)];
+        assert!(planes_share_kernel_object(&planes));
+        unsafe { libc::close(fd) };
+    }
+
+    #[test]
+    fn two_dup_fds_of_same_pipe_are_shared() {
+        let fd1 = open_pipe_read_fd();
+        // dup creates a new fd referencing the same kernel object → same st_ino.
+        let fd2 = unsafe { libc::dup(fd1) };
+        assert!(fd2 >= 0, "dup() failed");
+        let planes = vec![make_plane(fd1), make_plane(fd2)];
+        assert!(planes_share_kernel_object(&planes));
+        unsafe { libc::close(fd1) };
+        unsafe { libc::close(fd2) };
+    }
+
+    #[test]
+    fn two_independent_pipes_are_disjoint() {
+        let fd1 = open_pipe_read_fd();
+        let fd2 = open_pipe_read_fd();
+        // Each pipe is its own kernel object → different st_ino.
+        let planes = vec![make_plane(fd1), make_plane(fd2)];
+        assert!(!planes_share_kernel_object(&planes));
+        unsafe { libc::close(fd1) };
+        unsafe { libc::close(fd2) };
+    }
+
+    #[test]
+    fn invalid_fd_is_conservatively_disjoint() {
+        let fd1 = open_pipe_read_fd();
+        // -1 is the conventional "invalid fd"; fstat returns EBADF.
+        let planes = vec![make_plane(fd1), make_plane(-1)];
+        assert!(!planes_share_kernel_object(&planes));
+        unsafe { libc::close(fd1) };
+    }
+
+    #[test]
+    fn empty_planes_treated_as_shared() {
+        // Edge case: 0 planes can't disagree about inodes. Caller is
+        // responsible for the planes-not-empty check before this.
+        let planes: Vec<DmaBufPlane> = vec![];
+        assert!(planes_share_kernel_object(&planes));
+    }
 }
