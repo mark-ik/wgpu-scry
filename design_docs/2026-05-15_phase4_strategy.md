@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4b.1 + 4c.1 + 4c.2 shipped; 4c.3+ in flight.
+**Status:** 4a + 4b.1 + 4c.1 + 4c.2 + 4c.3 shipped; 4c.4+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -347,12 +347,28 @@ artifact.
       retrospective [`2026-06-03_phase4c2_retrospective.md`](2026-06-03_phase4c2_retrospective.md).
       Smoke renders a real `DmaBufImage` (1024×768 XR24 on AMD-tiled
       modifier); explicit-sync stays dormant (no fence getter yet).
-- [ ] **4c.3** Producer trait surface: navigate, resize, input
-      forwarding via `wpe_view_backend_dispatch_*_event`
-- [ ] **4c.4** Same Phase 2b–2e surface ported from
+- [x] **4c.3** Producer navigation (`navigate_to_string`,
+      `navigate_to_url`, `poll_navigation_event`) + resize via
+      `WPEToplevel`; spec
+      [`2026-06-03_phase4c3_navigation_resize.md`](2026-06-03_phase4c3_navigation_resize.md),
+      plan [`2026-06-03_phase4c3_implementation_plan.md`](2026-06-03_phase4c3_implementation_plan.md).
+      Empirical findings: (a) `WebKitLoadEvent` arrives in glib closures as
+      the GObject enum type, not gint — required a hand-rolled
+      `RustClosure::new_local` over `&[glib::Value]` extracting via
+      `.get::<i32>()`. (b) WPE auto-paints on resize (no renavigate
+      fallback needed). (c) The headless toplevel silently coerces all
+      dimensions to 1024×768 — `wpe_toplevel_resize` returns TRUE but
+      rendered size doesn't change. `resize()` is currently a shape
+      no-op on headless; honoring requested size needs additional WPE
+      API (likely `wpe_view_resized` or toplevel-state changes), tracked
+      for 4c.4+.
+- [ ] **4c.4** Input forwarding via `wpe_view_event(WPEEvent*)` —
+      keyboard / pointer / scroll / touch / IME. WPEPlatform path, not
+      legacy libwpe.
+- [ ] **4c.5** Phase 2b–2e surface ported from
       `webkitgtk_producer/` (cookies, schemes, popups, downloads,
-      cursor, IME state)
-- [ ] **4c.5** `demo-wpe` runtime probe — mirrors demo-linux
-- [ ] **4c.6** `docs/wpe-deployment.md` — Flatpak SDK manifest
+      cursor, IME state).
+- [ ] **4c.6** `demo-wpe` runtime probe — mirrors demo-linux
+- [ ] **4c.7** `docs/wpe-deployment.md` — Flatpak SDK manifest
       walkthrough
-- [ ] **4c.7** Parity matrix + README updates
+- [ ] **4c.8** Parity matrix + README updates
