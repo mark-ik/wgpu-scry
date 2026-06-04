@@ -16,6 +16,8 @@ mod producer;
 mod ffi;
 #[cfg(feature = "wpe")]
 mod headless;
+#[cfg(feature = "wpe")]
+mod navigation;
 
 pub use config::WpeProducerConfig;
 pub use producer::WpeProducer;
