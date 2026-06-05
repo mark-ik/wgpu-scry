@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 shipped; 4c.5.f, 4c.6, 4c.8 in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 shipped; 4c.5.f, 4c.6 in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -590,4 +590,16 @@ artifact.
       distribution is the consumer's responsibility, and the producer
       makes no assumption about install path beyond the pkg-config
       visibility `build.rs` enforces.
-- [ ] **4c.8** Parity matrix + README updates
+- [x] **4c.8** Parity matrix + README updates — capability parity
+      matrix at [`docs/parity-matrix.md`](../docs/parity-matrix.md)
+      comparing WebView2 / WKWebView / WebKitGTK 4.1 / WebKitGTK 6.0 /
+      WPE across the producer trait surface (frame transport, nav,
+      resize, input dispatch, cookies, schemes, cursor, IME, script
+      bridge, downloads, drag, find, PDF, profile isolation, process
+      recovery), with footnotes for the documented WPE-headless
+      caveats (resize no-op, touch dispatch hangs, RADV DCC pixel
+      correctness blocked on wgpu) and honest `?` for capabilities
+      the source doesn't clearly support. README's workspace table
+      promotes WPE to a co-equal Linux producer, adds the `demo-wpe`
+      crate row + quick-start block, and introduces a Documentation
+      section linking the matrix and the deployment guide.

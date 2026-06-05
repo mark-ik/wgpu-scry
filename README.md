@@ -8,12 +8,13 @@ This repo was extracted from [`wgpu-graft`](https://github.com/mark-ik/wgpu-graf
 
 | Crate | Purpose |
 | --- | --- |
-| [`scrying`](scrying/) | The library. Capability probe (`WebSurfaceMode`), per-platform `WebSurfaceProducer` impls. Windows (WebView2) and macOS (WKWebView) producers are real implementations. Linux ships three co-equal WebKit-family backends behind mutually-exclusive cargo features: WebKitGTK 4.1 (`webkitgtk-fallback`, currently the only fully-implemented Linux producer), WebKitGTK 6.0 (planned), and WPE (DMABUF scaffold). See [`design_docs/2026-05-14_linux_webkitgtk_phase_2a.md`](design_docs/2026-05-14_linux_webkitgtk_phase_2a.md). |
+| [`scrying`](scrying/) | The library. Capability probe (`WebSurfaceMode`), per-platform `WebSurfaceProducer` impls. Windows (WebView2) and macOS (WKWebView) producers are real implementations. Linux ships three co-equal WebKit-family backends behind mutually-exclusive cargo features: WebKitGTK 4.1 (`webkitgtk-fallback`) and WPE (`wpe`) both implement the full `WebSurfaceProducer` contract (with documented WPE-headless caveats); WebKitGTK 6.0 (`webkit6`) is a first-slice navigate-+-snapshot producer. See the [parity matrix](docs/parity-matrix.md) for capability-by-capability comparison. |
 | [`demo-scrying-winit`](demo-scrying-winit/) | Cross-platform selector smoke. Creates a winit/wgpu host and reports the backend, platform producer/config aliases, capability status, and supported native frame kinds selected for the current target. |
 | [`demo-win`](demo-win/) | Windows runtime probe. Drives the WebView2 CompositionController path into a wgpu texture, including WGC capture, shared D3D texture import, resize, input, navigation/message/cursor event drains, and optional readback/fence diagnostics. |
 | [`demo-mac`](demo-mac/) | macOS host probe. Hosts a `WkWebViewProducer` against a winit window's `NSView`; flagged modes drive nav / input / JS-messaging / SCK-capture / per-profile-data-store paths so each producer slice gets exercised at runtime. See [`demo-mac/README.md`](demo-mac/README.md). |
 | [`demo-linux`](demo-linux/) | Linux WebKitGTK 4.1 runtime probe. Hosts a `WebKitGtkProducer` in a producer-owned `GtkOffscreenWindow`, navigates to inline HTML or a URL, takes a CPU RGBA snapshot via `webkit_web_view_get_snapshot`, and writes it as a PNG. Flags: `--probe-only`, `--snapshot-test`, `--url`, `--out`, `--width`, `--height`. |
 | [`demo-linux6`](demo-linux6/) | Linux WebKitGTK 6.0 / GTK 4 runtime probe. Same shape as `demo-linux` but built against the `webkit6` feature — uses `gtk4::Window` + `webkit6::WebView` and the `NetworkSession` data-dir model new to WebKitGTK 6.0. GTK 4 dropped `GtkOffscreenWindow`, so the producer keeps a tiny `opacity=0` top-level window mapped to satisfy WebKit's "must be visible to render" constraint. |
+| [`demo-wpe`](demo-wpe/) | Linux WPE runtime probe. Constructs a `WpeProducer` against a self-owned `WPEDisplayHeadless` + `WebKitWebView`, navigates to inline HTML or a URL, pulls one `DmaBufImage` frame (plane fds + DRM format/modifier + optional `VkSemaphore` fd), prints plane metadata, and closes the fds. Flags: `--probe-only`, `--snapshot-test`, `--url`, `--width`, `--height`. See [`docs/wpe-deployment.md`](docs/wpe-deployment.md) for install + runtime requirements. |
 
 See [`scrying/README.md`](scrying/README.md) for the producer/consumer contract, the Windows WGC + shared D3D11 path, and the future explicit-fence-sync work.
 
@@ -80,6 +81,11 @@ cargo run -p demo-linux6 -- --snapshot-test                            # exit 1 
 cargo run -p demo-linux -- --url https://example.com --out example.png # real-page snapshot
 # All assertion modes at once (headless via offscreen WebView)
 bash scripts/test-linux.sh
+# Linux — WPE runtime probe (requires the wpe feature; WPEWebKit 2.52.3 + Wayland + Vulkan)
+cargo run -p demo-wpe                                                  # default HTML → one DMABUF frame
+cargo run -p demo-wpe -- --probe-only                                  # capability probe + exit
+cargo run -p demo-wpe -- --snapshot-test                               # exit 1 if no DMABUF frame within ~10 s
+cargo run -p demo-wpe -- --url https://example.com                     # real-page → one DMABUF frame
 ```
 
 Linux system-package prerequisites (Fedora 44 names; translate for Debian / Ubuntu / Arch):
@@ -97,6 +103,12 @@ sudo dnf install -y gtk4-devel webkitgtk6.0-devel
 ```
 
 `--*-test` modes default to a hidden window and `NSApplicationActivationPolicyProhibited` so they run silently in the background; pass `--visible` to watch the WKWebView in real time. `--capture-test` is the one exception — it forces visibility because SCK can't capture hidden windows, and is held out of `scripts/test-mac.sh` because Screen Recording permission can't be self-granted (CI runners need a `tccutil` pre-grant). `.github/workflows/test-mac.yml` runs the rest of the suite on every push to master against `macos-latest`.
+
+## Documentation
+
+- [`docs/parity-matrix.md`](docs/parity-matrix.md) — capability parity matrix across all backends (WebView2, WKWebView, WebKitGTK 4.1, WebKitGTK 6.0, WPE).
+- [`docs/wpe-deployment.md`](docs/wpe-deployment.md) — WPE deployment guide: Fedora install (philn COPR with F44 URL workaround), runtime requirements (WPEWebKit 2.52.3, Wayland, Vulkan), headless-platform limitations, wgpu pixel-correctness note, troubleshooting.
+- [`scrying/README.md`](scrying/README.md) — producer/consumer contract, Windows WGC + shared D3D11 path, explicit-fence-sync work.
 
 ## Relationship to wgpu-graft and wgpu-weld
 
