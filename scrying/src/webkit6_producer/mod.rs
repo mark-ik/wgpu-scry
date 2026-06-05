@@ -34,6 +34,7 @@ mod cursor;
 mod downloads;
 mod helpers;
 mod ime;
+mod input;
 mod navigation;
 mod producer;
 mod scheme_handler;

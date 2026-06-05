@@ -7,6 +7,7 @@ use std::rc::Rc;
 use dpi::PhysicalSize;
 use webkit6::gtk;
 use webkit6::gtk::prelude::*;
+use webkit6::prelude::*;
 use webkit6::{NetworkSession, UserContentManager, WebContext, WebView};
 
 use crate::{CursorShape, UrlSchemeHandlerFn, WebSurfaceCapabilities, WebSurfaceError};
@@ -178,5 +179,20 @@ impl WebKit6Producer {
 
     pub fn size(&self) -> PhysicalSize<u32> {
         self.size
+    }
+
+    /// Fire-and-forget JS dispatch used by the input-forwarding path
+    /// to push synthesized DOM events at page handlers. Mirrors the
+    /// GTK 3 producer's `run_input_js`: no completion callback because
+    /// input is one-way; the JS errors out silently if the page
+    /// doesn't have a sensible target element.
+    pub(crate) fn run_input_js(&self, js: &str) {
+        self.webview.evaluate_javascript(
+            js,
+            None,
+            None,
+            webkit6::gio::Cancellable::NONE,
+            |_| {},
+        );
     }
 }

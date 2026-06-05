@@ -7,10 +7,11 @@ use webkit6::gtk::prelude::*;
 use webkit6::prelude::*;
 
 use crate::{
-    CursorShape, NavigationEvent, WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame,
-    WebSurfaceMode, WebSurfaceProducer,
+    CursorShape, DragInput, KeyboardInput, MouseInput, NavigationEvent, PointerInput,
+    WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame, WebSurfaceMode, WebSurfaceProducer,
 };
 
+use super::input;
 use super::navigation::{arm_navigation, wait_for_load};
 use super::producer::WebKit6Producer;
 use super::script_message;
@@ -96,5 +97,37 @@ impl WebSurfaceProducer for WebKit6Producer {
 
     fn poll_cursor_shape(&mut self) -> Option<CursorShape> {
         self.cursor_shape.borrow_mut().take()
+    }
+
+    fn send_mouse_input(&mut self, event: MouseInput) -> Result<(), WebSurfaceError> {
+        // JS-event-synthesis only. GTK 4 removed `gtk_main_do_event`,
+        // so the GTK 3 producer's native `GdkEvent`-dispatch primary
+        // (which closes the `isTrusted` gap) has no analog here. See
+        // [`super::input`] module doc for the full caveat.
+        self.run_input_js(&input::mouse_event_js(event));
+        Ok(())
+    }
+
+    fn send_pointer_input(&mut self, event: PointerInput) -> Result<(), WebSurfaceError> {
+        self.run_input_js(&input::pointer_event_js(event));
+        Ok(())
+    }
+
+    fn send_keyboard_input(&mut self, event: KeyboardInput) -> Result<(), WebSurfaceError> {
+        let js = input::keyboard_event_js(&event);
+        if !js.is_empty() {
+            self.run_input_js(&js);
+        }
+        Ok(())
+    }
+
+    fn send_drag_input(&mut self, event: DragInput) -> Result<(), WebSurfaceError> {
+        // JS-event synthesis only. Pages whose drop handlers read
+        // `event.dataTransfer.files` see an empty list; coordinate /
+        // type discrimination still works. Mirrors the GTK 3 producer
+        // (which also routes drag through JS synthesis — its native
+        // path needs a `GdkDragContext` from a real drag source).
+        self.run_input_js(&input::drag_event_js(event));
+        Ok(())
     }
 }
