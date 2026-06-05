@@ -40,6 +40,10 @@ pub struct WebKitUserScript {
     _opaque: [u8; 0],
 }
 #[repr(C)]
+pub struct JSCValue {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
 pub struct WPEToplevel {
     _opaque: [u8; 0],
 }
@@ -164,6 +168,12 @@ unsafe extern "C" {
         allow_list: *const *const c_char,
         block_list: *const *const c_char,
     ) -> *mut WebKitUserScript;
+    // JSCValue string extraction — used by the script-message-received::scry
+    // signal closure. `jsc_value_to_string` returns a heap-allocated C string
+    // the caller must release with `g_free`.
+    pub fn jsc_value_to_string(value: *mut JSCValue) -> *mut c_char;
+    pub fn jsc_value_is_string(value: *mut JSCValue) -> c_int; // gboolean
+
     pub fn webkit_web_view_evaluate_javascript(
         web_view: *mut WebKitWebView,
         script: *const c_char,

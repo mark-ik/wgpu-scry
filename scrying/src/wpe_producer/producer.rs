@@ -55,6 +55,14 @@ pub struct WpeProducer {
     pub(super) handles: WpeHandles,
     #[cfg(feature = "wpe")]
     pub(super) nav_state: std::rc::Rc<std::cell::RefCell<super::navigation::NavState>>,
+    /// Incoming page→host messages drained by `poll_web_message` /
+    /// `wait_for_web_message` (Task 4). Pushed from the
+    /// `script-message-received::scry` signal closure installed in
+    /// `script_message::install`. Single-threaded RefCell — closure and
+    /// drainers both run on the producer's main-context thread.
+    #[cfg(feature = "wpe")]
+    pub(super) web_messages:
+        std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<String>>>,
 }
 
 /// The single-slot frame channel a producer's render callback writes into.
@@ -123,6 +131,10 @@ impl WpeProducer {
             super::navigation::NavState::default(),
         ));
         super::navigation::install_load_signals(&webview, &nav_state);
+        let web_messages = std::rc::Rc::new(std::cell::RefCell::new(
+            std::collections::VecDeque::new(),
+        ));
+        super::script_message::install(&webview, web_messages.clone());
         let producer = Self {
             capabilities: super::linux_wpe_capabilities(),
             size: config.size,
@@ -131,6 +143,7 @@ impl WpeProducer {
             generation: Arc::new(AtomicU64::new(0)),
             handles: WpeHandles { webview, view, toplevel, main_context },
             nav_state,
+            web_messages,
         };
         // Wire the WPEView frame seam now that the producer (and thus its
         // shared FrameSink) exists. The closure captures a FrameSink clone and
