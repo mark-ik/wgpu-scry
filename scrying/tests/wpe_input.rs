@@ -166,6 +166,50 @@ fn input_dispatch_does_not_crash() {
     );
     eprintln!("input smoke: chrome.webview.postMessage round-trip = {:?}", msg);
 
+    // --- 4c.5.b — cookie store round-trip ---
+    //
+    // Set a cookie via the producer, then read it back via
+    // request_cookies_for_url. Asserts both name AND value to verify
+    // the soup<->scry translators are wired in both directions.
+    //
+    // Domain/path here are intentionally NOT bound to the load_html
+    // base-uri (about:blank): the WPE cookie manager scopes lookups by
+    // (domain, path), so the get URL just needs to match those — no
+    // network round-trip required.
+    let probe = scrying::Cookie {
+        name: "scry_probe".to_string(),
+        value: "round_trip_ok".to_string(),
+        domain: "example.test".to_string(),
+        path: "/".to_string(),
+        expires_at: None, // session cookie
+        is_secure: false,
+        is_http_only: false,
+    };
+    producer.set_cookie(&probe).expect("set_cookie round-trip");
+    let cookies = producer
+        .request_cookies_for_url("http://example.test/")
+        .expect("request_cookies_for_url");
+    let hit = cookies.iter().find(|c| c.name == "scry_probe");
+    assert!(
+        hit.is_some(),
+        "expected the scry_probe cookie we just set to come back \
+         from request_cookies_for_url; got {} cookies: {:?}",
+        cookies.len(),
+        cookies.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+    assert_eq!(hit.unwrap().value, "round_trip_ok");
+    eprintln!(
+        "input smoke: cookie round-trip OK ({} cookie(s) returned for example.test)",
+        cookies.len()
+    );
+    // Clean up so subsequent test runs against the same ephemeral
+    // session don't see stale state. (The ephemeral
+    // WebKitNetworkSession resets on producer drop anyway, but the
+    // assert exercises delete_cookie's success path.)
+    producer
+        .delete_cookie(&probe)
+        .expect("delete_cookie round-trip");
+
     // --- 5. Verify the renderer is still alive after the input sequence ---
     //
     // EMPIRICAL: WPE may or may not auto-paint just from these input events.
