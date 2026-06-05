@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 shipped; 4c.5.f, 4c.6 in flight; A.3–A.9 queued.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 shipped; 4c.5.f, 4c.6 in flight; A.4–A.9 queued.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -650,7 +650,17 @@ A.1 (script-message bridge — same shared UCM).
       `Cookie::new(name, value, domain, path, max_age)`. webkit6's
       `CookieManager::add_cookie` / `delete_cookie` take `&soup::Cookie`
       (immutable) rather than `&mut`, simplifying the call site.
-- [ ] **A.3** Scheme handlers — port `webkitgtk_producer/scheme_handler.rs`.
+- [x] **A.3** Scheme handlers — `scheme_handler.rs` ported from the
+      GTK 3 precedent. `WebContext::register_uri_scheme` stayed on
+      `WebContext` under the 2022 GLib API (unlike cookies and
+      downloads, which moved to `NetworkSession`), so the registration
+      path was a near-line-for-line transcription with namespace
+      swapped (`webkit2gtk` → `webkit6`, `webkit2gtk::gio` →
+      `webkit6::gio`, `soup` 0.5 → `webkit6::soup` 0.9). Producer grew
+      a `new_with_url_schemes(config, schemes)` constructor; existing
+      `new` delegates with an empty map. Schemes are registered on the
+      `WebContext` BEFORE `WebView::builder()` runs so the very first
+      navigation can already resolve `myapp://...` URIs.
 - [ ] **A.4** Cursor — port `webkitgtk_producer/cursor.rs`.
 - [ ] **A.5** IME observability — port `webkitgtk_producer/ime.rs`
       (depends on A.1).
