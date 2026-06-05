@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 shipped; 4c.4.x / 4c.5+ in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 shipped; (β) resize, 4c.4.x, 4c.5+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -328,6 +328,27 @@ artifact.
 - [x] **4a.7** `build_dmabuf_capable_device` helper — enables
       `VK_EXT_image_drm_format_modifier` + `VK_KHR_external_semaphore_fd`
       at device creation (validated under `VK_LAYER_KHRONOS_validation`)
+- [x] **4a.x** Multi-plane shared-fd DMABUF import (DCC-compressed RGBA)
+      + foreign-queue acquire barrier — non-YUV multi-plane: planes
+      share one kernel DMABUF, communicated via N-entry plane_layouts.
+      Adds a transient acquire barrier from `VK_QUEUE_FAMILY_FOREIGN_EXT`
+      between bind and texture wrap (Vulkan-spec discipline for taking
+      ownership of producer-written DMABUFs). Spec
+      [`2026-06-04_phase4a_x_multiplane_dcc_import.md`](2026-06-04_phase4a_x_multiplane_dcc_import.md),
+      plan [`2026-06-04_phase4a_x_multiplane_dcc_plan.md`](2026-06-04_phase4a_x_multiplane_dcc_plan.md).
+      Import shape (size + format) verified on real WPE-on-AMD; pixel
+      correctness BLOCKED on an upstream wgpu API gap —
+      `create_texture_from_hal` (wgpu 29.0.3) tracks every external
+      texture as `UNINITIALIZED → vk::ImageLayout::UNDEFINED`, so wgpu's
+      first-use barrier transitions from UNDEFINED regardless of what
+      we left the image in, and Vulkan's spec allows that transition to
+      discard contents. RADV enforces strictly; gbm-linear escapes
+      because linear transitions are no-ops on most drivers. macOS Metal
+      and Windows D3D12 sidestep this entirely (their resource models
+      preserve contents on import). Fix is a wgpu `texture_from_raw`
+      initial-state parameter, upstream. Round-trip test logs observed
+      BGRA as a diagnostic; flips to assertion mode when wgpu lands the
+      API. Disjoint-fd multi-plane / YUV ycbcr stay deferred.
 - [x] **4b.1** Decide where the WPE bindings crates live →
       [`2026-05-20_phase4b_wpe_bindings_decision.md`](2026-05-20_phase4b_wpe_bindings_decision.md):
       inline in-tree FFI now, dedicated `wpe-rs` repo later
