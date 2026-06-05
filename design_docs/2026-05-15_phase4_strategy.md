@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 shipped; (β) resize, 4c.4.x, 4c.5+ in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a shipped; 4c.5.b-f, 4c.6+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -452,7 +452,29 @@ artifact.
       script-message bridge does. Not a standalone WPE-only sub-phase.
 - [ ] **4c.5** Phase 2b–2e surface ported from
       `webkitgtk_producer/` (cookies, schemes, popups, downloads,
-      cursor, IME state).
+      cursor, IME state). Decomposed into 4c.5.a-f below — each
+      independent except `e` (IME) depending on `a` (script-message).
+  - [x] **4c.5.a** Script-message bridge — `webkit_user_content_manager`
+        + `script-message-received::scry` signal + `chrome.webview`
+        shim injection at document-start + `WpeProducer` queue +
+        `post_web_message` / `poll_web_message` trait method impls +
+        inherent `wait_for_web_message(timeout)`. Spec
+        [`2026-06-05_phase4c5a_script_message.md`](2026-06-05_phase4c5a_script_message.md).
+        End-to-end verified: `tests/wpe_input.rs` round-trips
+        `window.chrome.webview.postMessage('hi from page')` → host's
+        `wait_for_web_message` returning `Some("hi from page")` on a
+        live headless WebKit. Empirical finding: `JSCValue` isn't a
+        registered `glib::ValueType`, so the signal closure went
+        directly to the `RustClosure::new_local` over `&[glib::Value]`
+        pattern (same shape as `navigation.rs`'s load-changed handler);
+        extracts the string via `jsc_value_to_string` + `g_free`.
+  - [ ] **4c.5.b** Cookies — port `webkitgtk_producer/cookies.rs`.
+  - [ ] **4c.5.c** Scheme handlers — port `scheme_handler.rs`.
+  - [ ] **4c.5.d** Cursor — port `cursor.rs`.
+  - [ ] **4c.5.e** IME observability — install `scryIme` handler +
+        DOM focusin/focusout/input watcher script + `TextInput*`
+        nav events. Depends on `4c.5.a`'s bridge.
+  - [ ] **4c.5.f** Downloads — port `downloads.rs`.
 - [ ] **4c.6** `demo-wpe` runtime probe — mirrors demo-linux
 - [ ] **4c.7** `docs/wpe-deployment.md` — Flatpak SDK manifest
       walkthrough
