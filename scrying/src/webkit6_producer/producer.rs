@@ -13,6 +13,7 @@ use crate::{CursorShape, UrlSchemeHandlerFn, WebSurfaceCapabilities, WebSurfaceE
 
 use super::config::WebKit6ProducerConfig;
 use super::cursor;
+use super::downloads;
 use super::helpers::ensure_gtk_init;
 use super::ime;
 use super::navigation::{NavState, install_load_signals};
@@ -141,6 +142,14 @@ impl WebKit6Producer {
 
         let cursor_shape: Rc<RefCell<Option<CursorShape>>> = Rc::new(RefCell::new(None));
         cursor::install(&webview, &cursor_shape);
+
+        let next_download_id: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+        downloads::install(
+            &network_session,
+            config.data_dir.join("downloads"),
+            nav_state.clone(),
+            next_download_id,
+        );
 
         Ok(Self {
             capabilities: super::linux_webkit6_capabilities(),
