@@ -1,7 +1,15 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 + A.5 + A.6 + A.7 + A.8 (exploration shipped, DMABUF empirically unavailable via GdkTexture; see A.8 row) shipped; 4c.5.f, 4c.6 in flight; A.9 queued.
+**Status:** Phase 4c arc complete (WPE first-class). Phase A arc
+complete (webkit6 to mac-level capability parity; GPU import blocked
+upstream on GTK 4.22's missing `GdkDmabufTexture` accessors).
+4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) +
+4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2
++ A.3 + A.4 + A.5 + A.6 + A.7 + A.8 (exploration shipped, DMABUF
+empirically unavailable via GdkTexture; see A.8 row) + A.9 (demo-
+linux6 subcommand surface + parity matrix + README closure) shipped;
+4c.5.f, 4c.6 remain (downloads-on-WPE and demo-wpe runtime probe).
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -626,7 +634,7 @@ A.1 (script-message bridge — same shared UCM).
 | **A.6 — Downloads** | `downloads.rs` — `NetworkSession::download-started` + per-download signal wiring (webkit6 moved the signal off `WebContext`) | — |
 | **A.7 — Input forwarding** | `input.rs` — keyboard + mouse + pointer + drag via JS-event synthesis through `evaluate_javascript`. `gtk_main_do_event` was removed in GTK 4, so the GTK 3 producer's `input_native.rs` (real `GdkEvent` dispatch, which closes the `isTrusted` gap) has no analog here — webkit6 ships JS-synthesis only, with the macOS-equivalent `event.isTrusted === false` caveat. | — |
 | **A.8 — DMABUF capture exploration** | `capture.rs` — `GtkWidgetPaintable` → `gtk4::Snapshot` → `GskRenderNode` → `GskRenderer::render_texture` → `GdkTexture`, then type-probe against `gdk4::DmabufTexture` and download via `GdkTextureDownloader` (format-aware). Empirical question: does GTK 4 deliver a DMABUF-backed `GdkTexture` from the WebKit GPU process in our setup, and can we shape it into `NativeFrame::DmaBufImage`? | — |
-| **A.9 — Devtools / inspector** | `open_devtools_window` — `WebInspector` API on webkit6 mirrors webkit2gtk closely | — |
+| **A.9 — Phase A closeout** | demo-linux6 subcommand surface mirroring the demo-linux subset that A.1-A.8 supports (`--scripted` / `--cookie-test` / `--scheme-test` / `--input-test` / `--download-test`), parity matrix updates honest about the JS-synthesis-only input path + the GTK 4.22 DMABUF accessor gap, README workspace-row + quick-start updates promoting `webkit6` to first-class. | A.1-A.8 |
 
 - [x] **A.1** Script-message bridge — `webkit6::UserContentManager`
       + `script-message-received::scry` signal + `chrome.webview`
@@ -786,4 +794,42 @@ A.1 (script-message bridge — same shared UCM).
       necessary scaffolding to either route: it isolates the
       texture-acquisition seam from the producer's frame-export contract
       so a future native arm can be added without re-wiring `acquire_frame`.
-- [ ] **A.9** Devtools / inspector window.
+- [x] **A.9** Phase A closeout — `demo-linux6` subcommand surface
+      mirroring the demo-linux subset that the A.1-A.8 capability set
+      supports: `--scripted` (A.1 script-message bridge round-trip),
+      `--cookie-test` (A.2 set/get/delete), `--scheme-test`
+      (A.3 `myscheme://` → page handler), `--input-test` (A.7 mouse +
+      keyboard synthesis → A.1 script-message assertion), and
+      `--download-test` (A.6 lifecycle via a `file://` source —
+      mirroring the demo-linux trick that bypasses custom-scheme
+      handlers, which don't fire on the download path). Deliberate
+      non-ports: `--cursor-test` / `--ime-test` need a real visible
+      display and are unit-test covered already; `--popup-test` /
+      `--drag-test` / `--text-test` depend on the GTK 3 producer's
+      native-`GdkEvent` primary (`gtk_main_do_event`), removed in
+      GTK 4, so the webkit6 producer's input surface is JS-synthesis
+      only. `--input-test` asserts `trusted=false` exclusively — the
+      `trusted=true` branch the GTK 3 demo accepts has no analog.
+      Webkit6 producer grew `wait_for_navigation_event(timeout,
+      predicate)` (GTK 4 `glib::MainContext::iteration(false)`-pumped
+      analog of the GTK 3 producer's main-loop polling helper) so
+      `--download-test` can poll for `DownloadStarted`/`Finished`.
+      Parity matrix bumps the WebKitGTK 6.0 column from the
+      first-slice ✘ baseline to near-parity with WebKitGTK 4.1: ✔ for
+      cookies / scheme handlers / cursor / IME / script-message /
+      downloads (with deferred-runtime caveats for cursor + IME
+      matching the WPE column's standard); ⚠ for keyboard / mouse /
+      pointer / scroll / drag (JS-synthesis only, `isTrusted=false`,
+      same caveat the macOS WKWebView producer documents); ⚠ for
+      Frame transport (detection of `gdk4::DmabufTexture` via the A.8
+      paintable-render path works, but extraction blocked by GTK 4.22's
+      missing public C accessors for plane fds/fourcc/modifier — the
+      inverse accessors live exclusively on `GdkDmabufTextureBuilder`);
+      `?` for touch / find / PDF / profile / process-recovery (no
+      demo-linux6 flag exercises them). The catch-all
+      `wk6-firstslice` footnote becomes one footnote per honest
+      delta, pointing into the relevant module docs.
+      README workspace-table row for `demo-linux6` updates from
+      "first-slice scope = navigate + snapshot" to the full subcommand
+      surface; `scrying` row promotes WebKitGTK 6.0 from "planned" to
+      first-class. Quick-start block lists every new flag.
