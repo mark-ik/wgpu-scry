@@ -20,6 +20,8 @@ mod headless;
 mod input;
 #[cfg(feature = "wpe")]
 mod navigation;
+#[cfg(feature = "wpe")]
+mod script_message;
 
 pub use config::WpeProducerConfig;
 pub use producer::WpeProducer;

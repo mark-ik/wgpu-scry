@@ -32,6 +32,14 @@ pub struct WebKitNetworkSession {
     _opaque: [u8; 0],
 }
 #[repr(C)]
+pub struct WebKitUserContentManager {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct WebKitUserScript {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
 pub struct WPEToplevel {
     _opaque: [u8; 0],
 }
@@ -74,6 +82,11 @@ pub const WPE_INPUT_SOURCE_MOUSE: i32 = 0;
 pub const WPE_INPUT_SOURCE_PEN: i32 = 1;
 pub const WPE_INPUT_SOURCE_KEYBOARD: i32 = 2;
 pub const WPE_INPUT_SOURCE_TOUCHSCREEN: i32 = 3;
+
+// WebKitUserContentInjectedFrames: first variant in enum.
+pub const WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES: i32 = 0;
+// WebKitUserScriptInjectionTime: first variant in enum.
+pub const WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START: i32 = 0;
 
 unsafe extern "C" {
     // WPEPlatform headless display constructor — the self-owned display the
@@ -130,6 +143,37 @@ unsafe extern "C" {
     );
 
     pub fn webkit_web_view_load_uri(view: *mut WebKitWebView, uri: *const c_char);
+
+    // Script-message bridge / user-content (4c.5.a).
+    pub fn webkit_web_view_get_user_content_manager(
+        web_view: *mut WebKitWebView,
+    ) -> *mut WebKitUserContentManager;
+    pub fn webkit_user_content_manager_register_script_message_handler(
+        manager: *mut WebKitUserContentManager,
+        name: *const c_char,
+        world_name: *const c_char,
+    ) -> c_int; // gboolean
+    pub fn webkit_user_content_manager_add_script(
+        manager: *mut WebKitUserContentManager,
+        script: *mut WebKitUserScript,
+    );
+    pub fn webkit_user_script_new(
+        source: *const c_char,
+        injected_frames: i32,
+        injection_time: i32,
+        allow_list: *const *const c_char,
+        block_list: *const *const c_char,
+    ) -> *mut WebKitUserScript;
+    pub fn webkit_web_view_evaluate_javascript(
+        web_view: *mut WebKitWebView,
+        script: *const c_char,
+        length: isize, // -1 for NUL-terminated
+        world_name: *const c_char,
+        source_uri: *const c_char,
+        cancellable: *mut std::ffi::c_void,
+        callback: *mut std::ffi::c_void,
+        user_data: *mut std::ffi::c_void,
+    );
 
     // --- Input event construction + dispatch (4c.4) ---
     // Signatures verified against
