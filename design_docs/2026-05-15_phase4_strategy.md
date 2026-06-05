@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 + A.5 + A.6 + A.7 shipped; 4c.5.f, 4c.6 in flight; A.8–A.9 queued.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 + A.5 + A.6 + A.7 + A.8 (exploration shipped, DMABUF empirically unavailable via GdkTexture; see A.8 row) shipped; 4c.5.f, 4c.6 in flight; A.9 queued.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -625,8 +625,8 @@ A.1 (script-message bridge — same shared UCM).
 | **A.5 — IME observability** | `ime.rs` — second `scryIme` UCM handler + DOM focus/input watcher → `NavigationEvent::TextInput*` | A.1 |
 | **A.6 — Downloads** | `downloads.rs` — `NetworkSession::download-started` + per-download signal wiring (webkit6 moved the signal off `WebContext`) | — |
 | **A.7 — Input forwarding** | `input.rs` — keyboard + mouse + pointer + drag via JS-event synthesis through `evaluate_javascript`. `gtk_main_do_event` was removed in GTK 4, so the GTK 3 producer's `input_native.rs` (real `GdkEvent` dispatch, which closes the `isTrusted` gap) has no analog here — webkit6 ships JS-synthesis only, with the macOS-equivalent `event.isTrusted === false` caveat. | — |
-| **A.8 — Settings application** | `WebSurfaceSettings` → `webkit6::Settings` mapping (parallel to GTK 3 producer's `apply_settings`) | — |
-| **A.9 — Devtools / inspector** | `open_devtools_window` — `WebInspector` API on webkit6 mirrors webkit2gtk closely | A.8 |
+| **A.8 — DMABUF capture exploration** | `capture.rs` — `GtkWidgetPaintable` → `gtk4::Snapshot` → `GskRenderNode` → `GskRenderer::render_texture` → `GdkTexture`, then type-probe against `gdk4::DmabufTexture` and download via `GdkTextureDownloader` (format-aware). Empirical question: does GTK 4 deliver a DMABUF-backed `GdkTexture` from the WebKit GPU process in our setup, and can we shape it into `NativeFrame::DmaBufImage`? | — |
+| **A.9 — Devtools / inspector** | `open_devtools_window` — `WebInspector` API on webkit6 mirrors webkit2gtk closely | — |
 
 - [x] **A.1** Script-message bridge — `webkit6::UserContentManager`
       + `script-message-received::scry` signal + `chrome.webview`
@@ -738,5 +738,52 @@ A.1 (script-message bridge — same shared UCM).
       native upgrade would route through `gtk4::GestureClick`
       controller synthesis or direct `GdkSurface` event-queue
       manipulation, both materially harder than `gtk_main_do_event`.
-- [ ] **A.8** Settings application — `WebSurfaceSettings` → webkit6.
+- [x] **A.8** DMABUF capture exploration — paintable-render path
+      wired and shipped behind the `WebSurfaceProducer::acquire_frame`
+      trait route. Walks `gtk4::WidgetPaintable::new(&webview)` →
+      `gtk4::Snapshot` → `to_node()` → `webview.native()?.renderer()?
+      .render_texture(&node, None)` to obtain a `GdkTexture`,
+      type-probes it against `gdk4::DmabufTexture` /
+      `gdk4::MemoryTexture` (logged per-call), and downloads pixels via
+      `gdk4::TextureDownloader` with `GdkMemoryFormat`-aware
+      un-premultiplication covering `B8g8r8a8Premultiplied` /
+      `R8g8b8a8Premultiplied` / `B8g8r8a8` / `R8g8b8a8`. Legacy
+      `webkit_web_view_get_snapshot` path retained as the final-resort
+      fallback inside `capture_native` for the not-yet-mapped /
+      no-renderer cases. 5 new pure-Rust unit tests pin the
+      `GdkMemoryFormat` → un-premultiplied-RGBA conversion table without
+      needing a display.
+
+      **Empirical outcome: DMABUF unavailable via this path on GTK 4.22
+      (Outcome B + C).** Two constraints surfaced during the
+      exploration:
+
+      (1) Even when `GDK_IS_DMABUF_TEXTURE(texture)` would pass, GTK 4
+      (through current stable 4.22) **exposes no public C API to extract
+      plane fds / fourcc / modifier / offset / stride from a
+      `GdkDmabufTexture`**. The header `<gdk/gdkdmabuftexture.h>`
+      declares only `gdk_dmabuf_texture_get_type()`; the inverse
+      accessors live exclusively on `GdkDmabufTextureBuilder` (used by
+      *producers* like GStreamer plugins handing a DMABUF *to* GTK for
+      display). Confirmed against the symbol table of
+      `/usr/lib64/libgtk-4.so` on Fedora 44: only
+      `gdk_dmabuf_texture_get_type` is exported. Without these
+      accessors, we can detect the DMABUF backing but not turn it into a
+      `DmaBufImage` the Phase 4a importer would consume.
+
+      (2) `gtk-rs/gdk4 0.11` mirrors the upstream API faithfully — the
+      `DmabufTexture` wrapper has no accessor methods either (its
+      `impl` block is empty in `src/auto/dmabuf_texture.rs`).
+
+      Net: even if GTK delivers a DMABUF-backed `GdkTexture` to our
+      WebView (which on a GL/Vulkan-renderer Wayland session it
+      plausibly will), we cannot ship `WebSurfaceFrame::Native(...)`
+      from the gtk-rs side today. The shape we'd need lives either
+      (a) behind a future GTK upstream PR adding public accessors, or
+      (b) in a private `GstWebKit` / web-process tap *before* GTK
+      wraps the buffer (the WPE-shaped hook this strategy doc's future
+      work references). The paintable-render path shipped here is the
+      necessary scaffolding to either route: it isolates the
+      texture-acquisition seam from the producer's frame-export contract
+      so a future native arm can be added without re-wiring `acquire_frame`.
 - [ ] **A.9** Devtools / inspector window.
