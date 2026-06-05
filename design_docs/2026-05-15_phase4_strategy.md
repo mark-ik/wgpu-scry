@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 + A.5 shipped; 4c.5.f, 4c.6 in flight; A.6–A.9 queued.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 + A.5 + A.6 shipped; 4c.5.f, 4c.6 in flight; A.7–A.9 queued.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -687,8 +687,29 @@ A.1 (script-message bridge — same shared UCM).
       change, password focus, malformed). Producer construction calls
       `ime::install(&ucm, &nav_state)` right after
       `script_message::install`.
-- [ ] **A.6** Downloads — port `webkitgtk_producer/downloads.rs`
-      (with `NetworkSession::download-started` shape change).
+- [x] **A.6** Downloads — `downloads.rs` ported from the GTK 3
+      precedent. Same two 2022-GLib-API deviations the WPE 4c.5.f port
+      already documented:
+      (1) `download-started` lives on `WebKitNetworkSession`, not
+      `WebContext` — webkit6's auto-binding reflects this, so we wire
+      `network_session.connect_download_started(...)` against the
+      `NetworkSession` the producer already owns;
+      (2) `webkit_download_set_destination` requires an absolute path
+      (`g_return_if_fail(g_path_is_absolute(...))`), not a `file://`
+      URI — webkit6's `Download::set_destination(&str)` takes the
+      bare path string. Cleaner than the WPE port: webkit6's gtk-rs
+      bindings expose typed `connect_download_started` /
+      `connect_received_data` / `connect_finished` / `connect_failed`
+      with native Rust closures (no hand-rolled `RustClosure` /
+      `connect_closure` / hand-bound FFI the WPE side needs because
+      its `Download` GObject isn't auto-bound). `received-data`
+      signature is `Fn(&Download, u64)` — `u64` matches the GTK 3
+      precedent. 5 path-stripping unit tests carry over from the WPE
+      port verbatim. Producer construction calls `downloads::install`
+      after `cursor::install`; downloads land under
+      `<config.data_dir>/downloads/`. Inherent
+      `WebKit6Producer::download_url` ports the GTK 3 precedent
+      directly (`webview.download_uri(url)`).
 - [ ] **A.7** Input forwarding — keyboard + mouse + scroll on GTK 4.
 - [ ] **A.8** Settings application — `WebSurfaceSettings` → webkit6.
 - [ ] **A.9** Devtools / inspector window.
