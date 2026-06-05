@@ -51,6 +51,29 @@ pub struct WPEToplevel {
 pub struct WPEEvent {
     _opaque: [u8; 0],
 }
+#[repr(C)]
+pub struct WebKitCookieManager {
+    _opaque: [u8; 0],
+}
+/// Opaque on the C side too — every consumer either passes it to a
+/// `*_finish` FFI (which crashes through `_opaque`) or hands it back to
+/// glib through a trampoline. Declaring it as zero-sized is sufficient
+/// for the FFI signatures.
+#[repr(C)]
+pub struct GAsyncResult {
+    _opaque: [u8; 0],
+}
+
+/// Matches the C `GAsyncReadyCallback` typedef. The `source` arg is the
+/// GObject that initiated the async op (in our case the
+/// `WebKitCookieManager`); `result` is the per-op `GAsyncResult`
+/// the matching `*_finish` FFI consumes; `user_data` is the
+/// `Box::into_raw`'d (manager, cell) pointer the trampoline takes back.
+pub type GAsyncReadyCallback = unsafe extern "C" fn(
+    source: *mut glib::gobject_ffi::GObject,
+    result: *mut GAsyncResult,
+    user_data: *mut std::ffi::c_void,
+);
 
 // WPEEventType discriminants — verified against
 // /usr/include/wpe-webkit-2.0/wpe-platform/wpe/WPEEvent.h. The C enum
@@ -245,4 +268,55 @@ unsafe extern "C" {
         y: f64,
     ) -> *mut WPEEvent;
     pub fn wpe_view_event(view: *mut WPEView, event: *mut WPEEvent);
+
+    // --- Cookie store (4c.5.b) ---
+    // Both getters are transfer-none — the WebView owns its network
+    // session; the network session owns its cookie manager. We can hand
+    // the resulting pointers straight to the cookie ops without ref
+    // bookkeeping. Signatures verified against
+    // /usr/include/wpe-webkit-2.0/wpe/WebKitWebView.h,
+    // /usr/include/wpe-webkit-2.0/wpe/WebKitNetworkSession.h, and
+    // /usr/include/wpe-webkit-2.0/wpe/WebKitCookieManager.h.
+    pub fn webkit_web_view_get_network_session(
+        web_view: *mut WebKitWebView,
+    ) -> *mut WebKitNetworkSession;
+    pub fn webkit_network_session_get_cookie_manager(
+        session: *mut WebKitNetworkSession,
+    ) -> *mut WebKitCookieManager;
+    pub fn webkit_cookie_manager_get_cookies(
+        manager: *mut WebKitCookieManager,
+        uri: *const c_char,
+        cancellable: *mut std::ffi::c_void, // NULL
+        callback: GAsyncReadyCallback,
+        user_data: *mut std::ffi::c_void,
+    );
+    pub fn webkit_cookie_manager_get_cookies_finish(
+        manager: *mut WebKitCookieManager,
+        result: *mut GAsyncResult,
+        error: *mut *mut glib::ffi::GError,
+    ) -> *mut glib::ffi::GList; // transfer-full GList<SoupCookie*>
+    pub fn webkit_cookie_manager_add_cookie(
+        manager: *mut WebKitCookieManager,
+        cookie: *mut std::ffi::c_void, // SoupCookie* — opaque from our side
+        cancellable: *mut std::ffi::c_void,
+        callback: GAsyncReadyCallback,
+        user_data: *mut std::ffi::c_void,
+    );
+    pub fn webkit_cookie_manager_add_cookie_finish(
+        manager: *mut WebKitCookieManager,
+        result: *mut GAsyncResult,
+        error: *mut *mut glib::ffi::GError,
+    ) -> c_int; // gboolean
+    pub fn webkit_cookie_manager_delete_cookie(
+        manager: *mut WebKitCookieManager,
+        cookie: *mut std::ffi::c_void,
+        cancellable: *mut std::ffi::c_void,
+        callback: GAsyncReadyCallback,
+        user_data: *mut std::ffi::c_void,
+    );
+    pub fn webkit_cookie_manager_delete_cookie_finish(
+        manager: *mut WebKitCookieManager,
+        result: *mut GAsyncResult,
+        error: *mut *mut glib::ffi::GError,
+    ) -> c_int;
 }
