@@ -95,6 +95,23 @@ pub(super) fn pointer_kind_to_wpe(kind: PointerEventKind) -> Option<(i32, bool)>
     }
 }
 
+/// Touch-side counterpart to `pointer_kind_to_wpe`. The WPE touch
+/// event type set has `DOWN/UP/MOVE/CANCEL` rather than the pointer
+/// set's `DOWN/UP/MOVE/ENTER/LEAVE`. Map `Leave` → `TOUCH_CANCEL`
+/// (the closest analogue: the touch sequence is being abandoned).
+pub(super) fn touch_kind_to_wpe(kind: PointerEventKind) -> Option<i32> {
+    match kind {
+        PointerEventKind::Update => Some(ffi::WPE_EVENT_TOUCH_MOVE),
+        PointerEventKind::Down | PointerEventKind::Activate => Some(ffi::WPE_EVENT_TOUCH_DOWN),
+        PointerEventKind::Up => Some(ffi::WPE_EVENT_TOUCH_UP),
+        PointerEventKind::Leave | PointerEventKind::CaptureChanged => {
+            Some(ffi::WPE_EVENT_TOUCH_CANCEL)
+        }
+        // PointerEventKind::Enter has no touch analogue.
+        _ => None,
+    }
+}
+
 // ============================================================================
 // Dispatch entry points — called from the WpeProducer trait impl.
 // ============================================================================
@@ -212,24 +229,54 @@ pub(super) unsafe fn dispatch_mouse(view: *mut ffi::WPEView, ev: &MouseInput) {
     }
 }
 
-/// SAFETY: same view validity contract. Returns Err on Touch device
-/// (deferred to 4c.4.1).
+/// SAFETY: same view validity contract. Touch dispatches via
+/// `wpe_event_touch_new` (sequence_id = `PointerInput.pointer_id`);
+/// mouse/pen dispatches via `wpe_event_pointer_{button,move}_new`.
+///
+/// **Headless-display caveat:** on WPE 2.52.3 headless, the touch
+/// path through `wpe_view_event` blocks indefinitely (the headless
+/// display doesn't provide the gesture-controller / screen state
+/// WPE's touch dispatch needs to complete synchronously). The
+/// translation is unit-tested; the runtime touch end-to-end belongs
+/// in a non-headless target or behind a producer-provided
+/// `WPEGestureController` (via `wpe_view_set_gesture_controller`).
+/// Mouse/pen are unaffected.
 pub(super) unsafe fn dispatch_pointer(
     view: *mut ffi::WPEView,
     ev: &PointerInput,
 ) -> Result<(), WebSurfaceError> {
-    if ev.device == PointerDevice::Touch {
-        return Err(WebSurfaceError::Unsupported(
-            "WPE touch input not yet implemented; 4c.4.1 follow-up",
-        ));
-    }
     let (x, y) = (ev.point.0 as f64, ev.point.1 as f64);
+
+    if ev.device == PointerDevice::Touch {
+        let Some(ty) = touch_kind_to_wpe(ev.kind) else {
+            return Ok(()); // Enter (no touch analogue) — silent no-op.
+        };
+        // SAFETY: `view` valid for the producer's lifetime; the event is
+        // consumed by `wpe_view_event` (transfer-full).
+        let evt = unsafe {
+            ffi::wpe_event_touch_new(
+                ty,
+                view,
+                ffi::WPE_INPUT_SOURCE_TOUCHSCREEN,
+                0, // time
+                0, // modifiers
+                ev.pointer_id, // sequence_id — distinguishes simultaneous touches
+                x,
+                y,
+            )
+        };
+        if !evt.is_null() {
+            unsafe { ffi::wpe_view_event(view, evt) };
+        }
+        return Ok(());
+    }
+
     let Some((ty, is_move)) = pointer_kind_to_wpe(ev.kind) else {
         return Ok(()); // Enter/Leave/CaptureChanged silently no-op
     };
     let source = match ev.device {
         PointerDevice::Pen => ffi::WPE_INPUT_SOURCE_PEN,
-        // Touch is rejected above; Mouse is the remaining case.
+        // Touch handled above; Mouse is the remaining case.
         _ => ffi::WPE_INPUT_SOURCE_MOUSE,
     };
     let evt = if is_move {
@@ -336,5 +383,39 @@ mod tests {
         assert_eq!(pointer_kind_to_wpe(PointerEventKind::Enter), None);
         assert_eq!(pointer_kind_to_wpe(PointerEventKind::Leave), None);
         assert_eq!(pointer_kind_to_wpe(PointerEventKind::CaptureChanged), None);
+    }
+
+    #[test]
+    fn touch_kind_translation() {
+        // Down/Up/Move map straightforwardly.
+        assert_eq!(
+            touch_kind_to_wpe(PointerEventKind::Down),
+            Some(ffi::WPE_EVENT_TOUCH_DOWN)
+        );
+        assert_eq!(
+            touch_kind_to_wpe(PointerEventKind::Activate),
+            Some(ffi::WPE_EVENT_TOUCH_DOWN)
+        );
+        assert_eq!(
+            touch_kind_to_wpe(PointerEventKind::Up),
+            Some(ffi::WPE_EVENT_TOUCH_UP)
+        );
+        assert_eq!(
+            touch_kind_to_wpe(PointerEventKind::Update),
+            Some(ffi::WPE_EVENT_TOUCH_MOVE)
+        );
+        // Leave + CaptureChanged → TOUCH_CANCEL (the closest semantic
+        // match: the touch sequence is being abandoned).
+        assert_eq!(
+            touch_kind_to_wpe(PointerEventKind::Leave),
+            Some(ffi::WPE_EVENT_TOUCH_CANCEL)
+        );
+        assert_eq!(
+            touch_kind_to_wpe(PointerEventKind::CaptureChanged),
+            Some(ffi::WPE_EVENT_TOUCH_CANCEL)
+        );
+        // Enter has no touch analogue (touches don't "enter" a region
+        // without a sequence start).
+        assert_eq!(touch_kind_to_wpe(PointerEventKind::Enter), None);
     }
 }

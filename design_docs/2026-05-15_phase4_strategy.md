@@ -408,8 +408,21 @@ artifact.
       `WPEInputSource` as their third arg with a specific param order
       that disagreed with the plan's signatures. Fixed; the smoke now
       runs without any GLib CRITICAL.
-- [ ] **4c.4.1** Touch input via `wpe_event_touch_new` + sequence-id
-      mapping (PointerInput.device == Touch).
+- [x] **4c.4.1** Touch input via `wpe_event_touch_new` + sequence-id
+      mapping (PointerInput.device == Touch). `dispatch_pointer` now
+      builds a `WPE_EVENT_TOUCH_{DOWN,UP,MOVE,CANCEL}` event from the
+      scrying `PointerEventKind` and dispatches via `wpe_view_event`,
+      with `sequence_id = pointer_id` for simultaneous touches. Unit
+      test `touch_kind_translation` covers the kind→type mapping
+      (including `Leave`/`CaptureChanged` → `TOUCH_CANCEL`, the
+      closest semantic match). **Empirical headless caveat:** on WPE
+      2.52.3 headless the touch path through `wpe_view_event` blocks
+      indefinitely (`futex_do_wait` inside dispatch; the headless
+      display doesn't provide the `WPEGestureController`/`WPEScreen`
+      state WPE's touch path needs to complete synchronously). Same
+      class of headless-platform limitation as (β) resize. Mouse + pen
+      paths unaffected; touch end-to-end belongs in a non-headless
+      target or behind a producer-provided `wpe_view_set_gesture_controller`.
 - [ ] **4c.4.2** Drag input — investigate whether WPE exposes a
       drag-and-drop signal surface or whether HTML5 DOM events need
       JS-bridge injection.

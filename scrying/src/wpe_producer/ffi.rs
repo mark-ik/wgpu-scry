@@ -52,6 +52,10 @@ pub const WPE_EVENT_POINTER_MOVE: i32 = 3;
 pub const WPE_EVENT_SCROLL: i32 = 6;
 pub const WPE_EVENT_KEYBOARD_KEY_DOWN: i32 = 7;
 pub const WPE_EVENT_KEYBOARD_KEY_UP: i32 = 8;
+pub const WPE_EVENT_TOUCH_DOWN: i32 = 9;
+pub const WPE_EVENT_TOUCH_UP: i32 = 10;
+pub const WPE_EVENT_TOUCH_MOVE: i32 = 11;
+pub const WPE_EVENT_TOUCH_CANCEL: i32 = 12;
 
 // WPEModifiers bitmask flags — verified against the same header.
 // Pointer-button modifier bits exist (1<<5..1<<9) but are not used by
@@ -69,6 +73,7 @@ pub const WPE_MODIFIER_KEYBOARD_CAPS_LOCK: u32 = 1 << 4;
 pub const WPE_INPUT_SOURCE_MOUSE: i32 = 0;
 pub const WPE_INPUT_SOURCE_PEN: i32 = 1;
 pub const WPE_INPUT_SOURCE_KEYBOARD: i32 = 2;
+pub const WPE_INPUT_SOURCE_TOUCHSCREEN: i32 = 3;
 
 unsafe extern "C" {
     // WPEPlatform headless display constructor — the self-owned display the
@@ -172,6 +177,16 @@ unsafe extern "C" {
         dy: f64,
         has_precise_deltas: i32,
         is_stop: i32,
+        x: f64,
+        y: f64,
+    ) -> *mut WPEEvent;
+    pub fn wpe_event_touch_new(
+        ty: i32,
+        view: *mut WPEView,
+        source: i32,
+        time: u32,
+        modifiers: u32,
+        sequence_id: u32,
         x: f64,
         y: f64,
     ) -> *mut WPEEvent;

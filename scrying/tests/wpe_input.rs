@@ -115,6 +115,22 @@ fn input_dispatch_does_not_crash() {
         })
         .expect("send_mouse_input wheel");
 
+    // --- 4c.4.1 — touch dispatch is NOT exercised here ---
+    //
+    // The `dispatch_pointer` Touch branch (which builds
+    // `wpe_event_touch_new` with sequence_id = pointer_id) is correct
+    // in shape and covered by the `touch_kind_translation` unit test
+    // in `scrying/src/wpe_producer/input.rs`. End-to-end runtime
+    // dispatch through `wpe_view_event` hangs the headless WebKit
+    // process indefinitely (observed: futex_do_wait inside the
+    // dispatch, no progress after several seconds). The same shape
+    // bit us in 4c.3's resize: the headless WPEDisplay simply
+    // doesn't provide the gesture-controller / screen state WPE's
+    // touch path needs to dispatch synchronously. Until a non-headless
+    // WPE producer lands or we provide our own gesture controller via
+    // `wpe_view_set_gesture_controller`, end-to-end touch testing
+    // belongs in a non-headless target.
+
     // --- 5. Verify the renderer is still alive after the input sequence ---
     //
     // EMPIRICAL: WPE may or may not auto-paint just from these input events.
