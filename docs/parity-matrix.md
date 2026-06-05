@@ -24,25 +24,25 @@ Demo flag coverage in [`README.md`](../README.md) is what makes a row
 
 | Capability | WebView2 (Windows) | WKWebView (macOS) | WebKitGTK 4.1 (`webkitgtk-fallback`) | WebKitGTK 6.0 (`webkit6`) | WPE (`wpe`) |
 | --- | --- | --- | --- | --- | --- |
-| Frame transport | Shared D3D11 texture via WGC (`ImportedTexture`) [^win-frame] | CPU snapshot + ScreenCaptureKit → `IOSurface`/`MTLTexture` (`ImportedTexture`) [^mac-frame] | CPU snapshot (`CpuRgba`) via `webkit_web_view_get_snapshot` | CPU snapshot (`CpuRgba`) via `webkit_web_view_get_snapshot` → `gdk::Texture::download` | DMABUF fds + optional `VkSemaphore` opaque fd (`DmaBufImage`) [^wpe-dcc] |
+| Frame transport | Shared D3D11 texture via WGC (`ImportedTexture`) [^win-frame] | CPU snapshot + ScreenCaptureKit → `IOSurface`/`MTLTexture` (`ImportedTexture`) [^mac-frame] | CPU snapshot (`CpuRgba`) via `webkit_web_view_get_snapshot` | CPU snapshot (`CpuRgba`) via `GtkWidgetPaintable` → `GskRenderer::render_texture` → `GdkTextureDownloader`, with legacy `webkit_web_view_get_snapshot` fallback; GPU import ⚠ [^wk6-dmabuf] | DMABUF fds + optional `VkSemaphore` opaque fd (`DmaBufImage`) [^wpe-dcc] |
 | Navigation (load HTML, load URL, wait_for_load) | ✔ | ✔ | ✔ | ✔ | ✔ |
 | Resize at runtime | ✔ | ✔ | ✔ | ✔ | ⚠ [^wpe-resize] |
-| Keyboard input dispatch | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ |
-| Mouse input dispatch | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ |
-| Pointer input dispatch (pen/stylus) | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ |
-| Touch input dispatch | ? [^win-touch] | ? [^mac-touch] | ? [^gtk-touch] | ✘ [^wk6-firstslice] | ⚠ [^wpe-touch] |
-| Scroll input dispatch | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ |
-| Cookie get/set/delete | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ |
-| Custom URL scheme handlers | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ [^wpe-scheme-coverage] |
-| Cursor-shape reporting | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ [^wpe-cursor-coverage] |
-| IME observability (focus/change/blur) | ? [^win-ime] | ? [^mac-ime] | ✔ | ✘ [^wk6-firstslice] | ✔ |
-| Script-message bridge (host ↔ page postMessage) | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ |
-| Download lifecycle observability | ✔ | ✔ | ✔ | ✘ [^wk6-firstslice] | ✔ |
-| Drag/drop | ✔ [^win-drag] | ✘ [^mac-drag] | ✔ [^gtk-drag] | ✘ [^wk6-firstslice] | ✘ [^wpe-drag] |
-| Find-in-page | ✔ | ✔ | ? | ✘ [^wk6-firstslice] | ✘ |
-| PDF rendering | ✔ | ✔ | ? | ✘ [^wk6-firstslice] | ✘ |
-| Profile data isolation | ✔ | ✔ | ? | ? | ✔ |
-| Process-isolation/recovery | ✔ | ✔ | ✔ | ? | ? [^wpe-process] |
+| Keyboard input dispatch | ✔ | ✔ | ✔ | ⚠ [^wk6-input-js-only] | ✔ |
+| Mouse input dispatch | ✔ | ✔ | ✔ | ⚠ [^wk6-input-js-only] | ✔ |
+| Pointer input dispatch (pen/stylus) | ✔ | ✔ | ✔ | ⚠ [^wk6-input-js-only] | ✔ |
+| Touch input dispatch | ? [^win-touch] | ? [^mac-touch] | ? [^gtk-touch] | ? [^wk6-touch] | ⚠ [^wpe-touch] |
+| Scroll input dispatch | ✔ | ✔ | ✔ | ⚠ [^wk6-input-js-only] | ✔ |
+| Cookie get/set/delete | ✔ | ✔ | ✔ | ✔ | ✔ |
+| Custom URL scheme handlers | ✔ | ✔ | ✔ | ✔ | ✔ [^wpe-scheme-coverage] |
+| Cursor-shape reporting | ✔ | ✔ | ✔ | ✔ [^wk6-cursor-coverage] | ✔ [^wpe-cursor-coverage] |
+| IME observability (focus/change/blur) | ? [^win-ime] | ? [^mac-ime] | ✔ | ✔ [^wk6-ime-coverage] | ✔ |
+| Script-message bridge (host ↔ page postMessage) | ✔ | ✔ | ✔ | ✔ | ✔ |
+| Download lifecycle observability | ✔ | ✔ | ✔ | ✔ | ✔ |
+| Drag/drop | ✔ [^win-drag] | ✘ [^mac-drag] | ✔ [^gtk-drag] | ⚠ [^wk6-drag] | ✘ [^wpe-drag] |
+| Find-in-page | ✔ | ✔ | ? | ? [^wk6-find] | ✘ |
+| PDF rendering | ✔ | ✔ | ? | ? [^wk6-pdf] | ✘ |
+| Profile data isolation | ✔ | ✔ | ? | ? [^wk6-profile] | ✔ |
+| Process-isolation/recovery | ✔ | ✔ | ✔ | ? [^wk6-process] | ? [^wpe-process] |
 
 [^win-frame]: WebView2 composition-controller → WinComp visual →
 `Windows.Graphics.Capture::CreateFromVisual` → `Bgra8Unorm` D3D11
@@ -109,11 +109,83 @@ per process or spawn a subprocess per producer. There is no
 `web-process-terminated` recovery handler wired today. See
 [`docs/wpe-deployment.md#one-wpe-display-per-process`](wpe-deployment.md#one-wpe-display-per-process).
 
-[^wk6-firstslice]: WebKitGTK 6.0 is the Phase 5 first slice: navigate
-+ offscreen-rendered CPU snapshot only. Cookies, URL schemes, input
-forwarding, IME, cursor reporting, popup intercept, downloads, and
-process-recovery are explicitly deferred to follow-on slices. See
-[`scrying/src/webkit6_producer/mod.rs`](../scrying/src/webkit6_producer/mod.rs).
+[^wk6-dmabuf]: Phase A.8 wired the paintable-render capture path
+(`GtkWidgetPaintable` → `GskRenderer::render_texture` → `GdkTexture`)
+and probes the resulting texture against `gdk4::DmabufTexture`.
+Detection works (`GDK_IS_DMABUF_TEXTURE`-equivalent type probe), but
+extraction is blocked by an upstream GTK 4 API gap: through current
+stable GTK 4.22, there is no public C accessor for
+`GdkDmabufTexture`'s plane fds / fourcc / modifier / offset / stride
+(the inverse accessors live exclusively on `GdkDmabufTextureBuilder`,
+which is the *producer* side). `libgtk-4.so`'s symbol table on Fedora
+44 confirms this — only `gdk_dmabuf_texture_get_type` is exported.
+The producer therefore downloads pixels via `GdkTextureDownloader`
+into the `CpuRgba` tier; a future `WebSurfaceFrame::Native(...)` arm
+needs either a GTK upstream PR adding accessors, or a private
+`GstWebKit` / web-process tap before GTK wraps the buffer. See
+[`scrying/src/webkit6_producer/capture.rs`](../scrying/src/webkit6_producer/capture.rs)
+module doc and the [Phase A.8 strategy
+row](../design_docs/2026-05-15_phase4_strategy.md).
+
+[^wk6-input-js-only]: WebKitGTK 6.0 ships JS-event-synthesis input
+forwarding only — the GTK 3 producer's native `GdkEvent`-dispatch
+primary (which closes the `isTrusted` gap via `gtk_main_do_event`) has
+no analog because GTK 4 removed `gtk_main_do_event` (and
+`gdk_event_new` / `gdk_event_put` with it). Synthesized DOM events
+arrive with `event.isTrusted === false`; page code that
+discriminates on `isTrusted` (some click-fraud defences,
+`requestFullscreen()`, autoplay-gating user gestures) will reject
+these events. Same caveat the macOS WKWebView producer documents. A
+future native upgrade would route through `gtk4::GestureClick`
+controller synthesis or direct `GdkSurface` event-queue manipulation,
+both materially harder than the GTK 3 `gtk_main_do_event` call. See
+[`scrying/src/webkit6_producer/input.rs`](../scrying/src/webkit6_producer/input.rs)
+module doc.
+
+[^wk6-touch]: WebKitGTK 6.0 has no `--touch-test` flag in the
+demo-linux6 suite, and the JS-synthesis input path
+(`webkit6_producer/input.rs`) doesn't ship a `TouchEvent` builder.
+Marked `?` rather than guessing.
+
+[^wk6-cursor-coverage]: `mouse-target-changed` → `CursorShape`
+translation ships and is unit-tested in `webkit6_producer/cursor.rs`;
+end-to-end runtime coverage requires a real DOM hover, deferred until
+a non-headless webkit6 host exists (same `?` → ✔ standard the WPE
+column applies to the analogous WPE row, except here cursor reporting
+is signal-driven from the engine and is structurally identical to the
+GTK 3 producer — ✔ with the deferred-runtime caveat).
+
+[^wk6-ime-coverage]: `scryIme` UCM handler + DOM
+focusin/focusout/input/selectionchange observer ships and is
+unit-tested in `webkit6_producer/ime.rs` (5 `parse_event` tests
+verbatim from the GTK 3 / WPE precedents). End-to-end runtime
+coverage requires a real focused input element; deferred along with
+`--cursor-test`.
+
+[^wk6-drag]: WebKitGTK 6.0 implements `send_drag_input` via JS-event
+synthesis only — `event.dataTransfer.files` is empty for pages whose
+drop handlers read it; coordinate / type discrimination still works.
+GTK 3 has the same JS-synthesis path PLUS the
+`gtk_main_do_event`-based native primary, which webkit6 lacks. No
+`--drag-test` flag in demo-linux6 because the synthesis path's
+fidelity is materially lower than GTK 3's native path; a future
+`gtk4::GestureDrag`-based upgrade would close the gap.
+
+[^wk6-find]: WebKitGTK 6.0 has no `--find-test` flag in the
+demo-linux6 suite. Marked `?` rather than guessing — webkit6 exposes
+the same `WebViewExt::find_controller` API as the GTK 3 line, but
+the producer doesn't currently surface a host-facing find API.
+
+[^wk6-pdf]: WebKitGTK 6.0 has no `--pdf-test` flag in the demo-linux6
+suite. Marked `?` rather than guessing.
+
+[^wk6-profile]: Same `?` the GTK 3 row carries — the producer uses a
+host-supplied `data_dir` and constructs an isolated `NetworkSession`
+against it, so profile isolation is structurally present, but no
+`--profile-test` flag exercises it in demo-linux6.
+
+[^wk6-process]: Same `?` the WPE row carries — the producer doesn't
+wire a `web-process-terminated` recovery handler today.
 
 [^win-touch]: WebView2 has no `--touch-test` flag in the demo-win
 suite; the producer's input surface is mouse/pointer/keyboard. Native
