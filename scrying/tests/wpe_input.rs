@@ -131,6 +131,41 @@ fn input_dispatch_does_not_crash() {
     // `wpe_view_set_gesture_controller`, end-to-end touch testing
     // belongs in a non-headless target.
 
+    // --- 4c.5.a — JS → host postMessage round-trip ---
+    //
+    // Navigate to a page whose inline <script> calls
+    // window.chrome.webview.postMessage('hi from page') at parse time.
+    // The chrome.webview shim is injected at document-start by
+    // script_message::install, so the postMessage call hits the scry
+    // user-content handler, which extracts the JSCValue string via
+    // jsc_value_to_string and pushes "hi from page" onto the
+    // producer's web_messages queue. wait_for_web_message drains it.
+    //
+    // We re-navigate (rather than appending to the existing page)
+    // because the chrome.webview shim runs at document-start: a second
+    // navigation is the cleanest way to trigger the postMessage from
+    // page-side code without script injection.
+    producer
+        .navigate_to_string(
+            "<body><script>window.chrome.webview.postMessage('hi from page');</script></body>",
+            std::time::Duration::from_secs(5),
+        )
+        .expect("navigate_to_string for postMessage round-trip");
+    // Drain navigation events from the re-navigate so they don't
+    // pollute later assertions.
+    while producer.poll_navigation_event().is_some() {}
+
+    let msg = producer.wait_for_web_message(std::time::Duration::from_secs(2));
+    assert_eq!(
+        msg.as_deref(),
+        Some("hi from page"),
+        "expected the page's chrome.webview.postMessage to round-trip back as 'hi from page' \
+         (got {:?}); this verifies the script_message::install signal closure + the \
+         chrome.webview shim injection are wired correctly end-to-end.",
+        msg
+    );
+    eprintln!("input smoke: chrome.webview.postMessage round-trip = {:?}", msg);
+
     // --- 5. Verify the renderer is still alive after the input sequence ---
     //
     // EMPIRICAL: WPE may or may not auto-paint just from these input events.

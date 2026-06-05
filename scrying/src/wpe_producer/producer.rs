@@ -292,6 +292,31 @@ impl WpeProducer {
     ) -> Result<(), crate::WebSurfaceError> {
         super::navigation::wait_for_load(&self.handles.main_context, &self.nav_state, timeout)
     }
+
+    /// Pump the producer's main context until a page → host JS message
+    /// arrives or `timeout` elapses. Returns `None` on timeout.
+    ///
+    /// Useful for hosts that don't drive their own glib main loop but
+    /// need to block briefly waiting for `window.chrome.webview.postMessage`
+    /// to land — runtime smokes, scripted tests, request/response patterns.
+    /// Non-blocking callers should use the `poll_web_message` trait method.
+    pub fn wait_for_web_message(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Option<String> {
+        let ctx = &self.handles.main_context;
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(m) = self.web_messages.borrow_mut().pop_front() {
+                return Some(m);
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            ctx.iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
 }
 
 impl Drop for WpeProducer {
@@ -494,6 +519,61 @@ impl WebSurfaceProducer for WpeProducer {
     // host needs OS-level drag-from-host semantics it'll have to inject
     // HTML5 drag/drop DOM events through the JS message bridge (a 4c.5
     // surface) — the producer trait is reserved for that approach.
+
+    fn post_web_message(&mut self, message: &str) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")] {
+            // Build: window.chrome.webview.__scryDispatch(<escaped message>);
+            // The chrome.webview shim is injected at document-start by
+            // script_message::install, so __scryDispatch is always available.
+            let escaped = super::script_message::escape_for_js(message);
+            let script = format!(
+                "window.chrome && window.chrome.webview && \
+                 window.chrome.webview.__scryDispatch && \
+                 window.chrome.webview.__scryDispatch({escaped});"
+            );
+            let c_script = std::ffi::CString::new(script).map_err(|_| {
+                WebSurfaceError::Platform(
+                    "post_web_message: script contained interior NUL".into(),
+                )
+            })?;
+            // SAFETY: the webview pointer is borrowed from the producer-
+            // owned glib::Object; evaluate_javascript copies its script
+            // arg before returning, so the CString can drop at end of
+            // scope. NULL callback = fire-and-forget; we don't observe
+            // the JS evaluation result.
+            use glib::translate::ToGlibPtr;
+            let raw_view: *mut super::ffi::WebKitWebView =
+                ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(
+                    &self.handles.webview,
+                ).0 as *mut _;
+            unsafe {
+                super::ffi::webkit_web_view_evaluate_javascript(
+                    raw_view,
+                    c_script.as_ptr(),
+                    -1, // NUL-terminated
+                    std::ptr::null(), // default world
+                    std::ptr::null(), // no source uri
+                    std::ptr::null_mut(), // no cancellable
+                    std::ptr::null_mut(), // no completion callback
+                    std::ptr::null_mut(),
+                );
+            }
+            Ok(())
+        }
+        #[cfg(not(feature = "wpe"))] {
+            let _ = message;
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer built without the `wpe` feature; rebuild with --features wpe",
+            ))
+        }
+    }
+
+    fn poll_web_message(&mut self) -> Option<String> {
+        #[cfg(feature = "wpe")] {
+            self.web_messages.borrow_mut().pop_front()
+        }
+        #[cfg(not(feature = "wpe"))] { None }
+    }
 }
 
 #[cfg(test)]
