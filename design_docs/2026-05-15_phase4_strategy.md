@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c shipped; 4c.5.d-f, 4c.6+ in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d shipped; 4c.5.e-f, 4c.6+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -515,7 +515,31 @@ artifact.
         the existing dep so headers go through that. Out: integration
         smoke (the cross-backend trait test infra doesn't yet cover
         scheme handlers, and per the brief we defer until it does).
-  - [ ] **4c.5.d** Cursor — port `cursor.rs`.
+  - [x] **4c.5.d** Cursor — port `cursor.rs`. **Shipped.** Direct
+        port of the GTK precedent: `mouse-target-changed` signal on
+        the WebKitWebView routes a `WebKitHitTestResult` context
+        bitmask through `shape_from_hit_test` into a single-slot
+        `Rc<RefCell<Option<CursorShape>>>` field on `WpeProducer`.
+        Drained by `poll_cursor_shape` (trait override) or pumped by
+        `wait_for_cursor_shape` (inherent helper). FFI adds
+        `WebKitHitTestResult` (opaque) +
+        `webkit_hit_test_result_get_context(*mut _) -> u32` (verified
+        against `/usr/include/wpe-webkit-2.0/wpe/WebKitHitTestResult.h`
+        — bitmask constants are identical to the GTK header). Signal
+        connection uses `glib::RustClosure::new_local` over
+        `&[glib::Value]` (same as `script_message::install`); the
+        HitTestResult arg comes out via `value.get::<glib::Object>()`
+        with a raw pointer cast — `closure_local!` would panic on the
+        unregistered GType, matching the 4c.3 / 4c.5.a lesson.
+        De-dup `Rc<Cell<u32>>` for the last context bitmask mirrors
+        the GTK precedent's optimization. 6 unit tests cover the
+        precedence-mapping table; integration smoke deferred until a
+        non-headless WPE producer can fire a real DOM hover (the
+        signal needs an actual hit-test to emit). Empirical-risk
+        items 1 and 2 from the brief both panned out: `glib::Value`
+        extraction worked cleanly with no `g_value_get_object`
+        fallback, and `WebKitHitTestResult` is present in WPE 2.52.3
+        exactly as expected.
   - [ ] **4c.5.e** IME observability — install `scryIme` handler +
         DOM focusin/focusout/input watcher script + `TextInput*`
         nav events. Depends on `4c.5.a`'s bridge.
