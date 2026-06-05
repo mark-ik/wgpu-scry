@@ -79,6 +79,14 @@ unsafe extern "C" {
     // scrying has finished importing it (used in later tasks).
     pub fn wpe_view_buffer_released(view: *mut WPEView, buffer: *mut WPEBuffer);
 
+    // View-side size notification — emits the view's `resized` signal and
+    // updates `wpe_view_get_width/height`. On the headless display this is
+    // what actually drives the rendered buffer dimensions: the toplevel's
+    // `resize` vfunc is a no-op there, so `wpe_toplevel_resize` returning
+    // TRUE doesn't propagate to the WebView's render target. Calling this
+    // explicitly after the toplevel resize tells WebKit the new size.
+    pub fn wpe_view_resized(view: *mut WPEView, width: c_int, height: c_int);
+
     // Toplevel chain — under WPEPlatform the view's render size is set on
     // its WPEToplevel, not on the view directly.
     pub fn wpe_view_get_toplevel(view: *mut WPEView) -> *mut WPEToplevel;
