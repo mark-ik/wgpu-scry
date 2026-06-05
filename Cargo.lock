@@ -3208,6 +3208,7 @@ dependencies = [
  "gbm",
  "gdk",
  "glib 0.18.5",
+ "gsk4",
  "gtk",
  "gtk4",
  "image",

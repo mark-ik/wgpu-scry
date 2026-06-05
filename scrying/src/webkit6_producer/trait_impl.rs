@@ -26,7 +26,12 @@ impl WebSurfaceProducer for WebKit6Producer {
     }
 
     fn acquire_frame(&mut self) -> Result<WebSurfaceFrame, WebSurfaceError> {
-        self.capture_cpu_snapshot()
+        // Phase A.8: try the paintable-render path first (which probes
+        // for `GdkDmabufTexture` and uses the format-aware downloader);
+        // fall back to the legacy `webkit_web_view_get_snapshot` path
+        // inside `capture_native` itself if the paintable-render path
+        // can't fire (e.g., the window hasn't mapped yet).
+        self.capture_native()
     }
 
     fn navigate_to_string(&mut self, html: &str, timeout: Duration) -> Result<(), WebSurfaceError> {

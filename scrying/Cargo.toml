@@ -20,7 +20,7 @@ webkitgtk-fallback = [
 # incompatible glib / gtk crate-version trees). The producer-alias
 # selection in `lib.rs` lets `webkit6` win if both are enabled, but
 # expect noisier build output and a larger dependency graph.
-webkit6 = ["dep:gtk4", "dep:webkit6"]
+webkit6 = ["dep:gtk4", "dep:gsk4", "dep:webkit6"]
 # Hand-written WPEPlatform FFI producer (the planned Linux primary).
 # Requires WPEWebKit dev libs at build time (Fedora 44):
 #   sudo dnf install -y wpewebkit-devel libwpe-devel wpebackend-fdo-devel
@@ -78,7 +78,18 @@ soup = { package = "soup3", version = "0.5", optional = true }
 #   sudo dnf install -y gtk4-devel webkitgtk6.0-devel
 # The `v2_44` feature gate matches Fedora 44's webkitgtk6.0 2.52.3
 # (≥ 2.44), opening the newer API surface (evaluate_javascript, etc.)
-gtk4 = { version = "0.11", optional = true }
+# Enable `v4_14` to unlock `gdk4::DmabufTexture` (and the type-check
+# downcast the webkit6 producer's Phase A.8 paintable-render path
+# performs against the rendered texture). Fedora 44 ships GTK 4.22, so
+# 4.14 is the safe baseline. Also pulls `gdk4::TextureDownloader` in
+# (already v4_10 / always present at 4.14+) — used by the same path's
+# format-aware CPU-readback fallback.
+gtk4 = { version = "0.11", features = ["v4_14"], optional = true }
+# GSK is used by the webkit6 producer's Phase A.8 DMABUF-capture
+# exploration: render-tree → render node → renderer.render_texture(). The
+# resulting `GdkTexture` is then probed for `GdkDmabufTexture` to see if
+# GTK actually hands us a DMABUF-backed texture on this stack.
+gsk4 = { version = "0.11", optional = true }
 webkit6 = { version = "0.6", features = ["v2_44"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
