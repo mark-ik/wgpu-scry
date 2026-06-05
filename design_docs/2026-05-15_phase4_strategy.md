@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 shipped; 4c.5.f, 4c.6 in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 shipped; 4c.5.f, 4c.6 in flight; A.2–A.9 queued.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -603,3 +603,52 @@ artifact.
       promotes WPE to a co-equal Linux producer, adds the `demo-wpe`
       crate row + quick-start block, and introduces a Documentation
       section linking the matrix and the deployment guide.
+
+---
+
+## Phase A — WebKitGTK 6.0 / GTK 4 producer surface parity
+
+The `webkit6_producer` module shipped its first slice in Phase 5
+(navigate + resize + CPU snapshot) and currently sits at parity with
+the GTK 3 producer's *frame* surface only. Phase A ports the
+remaining Phase 2b–2e surface from `webkitgtk_producer/` to the
+webkit6 line, sub-phase-by-sub-phase, mirroring the structure WPE's
+4c.5 used. Each row is independent except A.5 (IME) which depends on
+A.1 (script-message bridge — same shared UCM).
+
+| Sub-phase | What ships | Depends on |
+| --- | --- | --- |
+| **A.1 — Script-message bridge** | `script_message.rs` + `chrome.webview` shim + `post_web_message` / `poll_web_message` / `wait_for_web_message` | — |
+| **A.2 — Cookies** | `cookies.rs` — `request_cookies_for_url` / `set_cookie` / `delete_cookie` via `NetworkSession::cookie_manager` | — |
+| **A.3 — Scheme handlers** | `scheme_handler.rs` — `webkit_web_context_register_uri_scheme` + per-request trampoline | — |
+| **A.4 — Cursor reporting** | `cursor.rs` — `mouse-target-changed` + `WebKitHitTestResult` precedence mapping + `poll_cursor_shape` | — |
+| **A.5 — IME observability** | `ime.rs` — second `scryIme` UCM handler + DOM focus/input watcher → `NavigationEvent::TextInput*` | A.1 |
+| **A.6 — Downloads** | `downloads.rs` — `NetworkSession::download-started` + per-download signal wiring (webkit6 moved the signal off `WebContext`) | — |
+| **A.7 — Input forwarding** | `input.rs` — keyboard + mouse + scroll. GTK 4 removed the synthetic-event path the GTK 3 producer's `input_native.rs` used; the webkit6 path is JS dispatch or `gtk4::GestureClick` synthesis. Approach TBD; spec deferred until A.1–A.6 land. | — |
+| **A.8 — Settings application** | `WebSurfaceSettings` → `webkit6::Settings` mapping (parallel to GTK 3 producer's `apply_settings`) | — |
+| **A.9 — Devtools / inspector** | `open_devtools_window` — `WebInspector` API on webkit6 mirrors webkit2gtk closely | A.8 |
+
+- [x] **A.1** Script-message bridge — `webkit6::UserContentManager`
+      + `script-message-received::scry` signal + `chrome.webview`
+      shim injection at document-start + `WebKit6Producer` queue +
+      `post_web_message` / `poll_web_message` trait method impls +
+      inherent `wait_for_web_message(timeout)`. Cleaner port than
+      the WPE precedent — webkit6's gtk-rs bindings expose
+      `connect_script_message_received` with `&javascriptcore::Value`
+      directly (`to_str` is inherent on the `javascriptcore6 = 0.6`
+      `Value`, no `ValueExt` trait or `closure_local!` workaround
+      needed). `evaluate_javascript` lives behind the `v2_44` feature
+      gate the producer already enables. WebView construction now
+      builds an explicit `UserContentManager` and passes it via
+      `WebView::builder().user_content_manager(...)` so handler
+      registration + shim injection have a stable handle.
+- [ ] **A.2** Cookies — port `webkitgtk_producer/cookies.rs`.
+- [ ] **A.3** Scheme handlers — port `webkitgtk_producer/scheme_handler.rs`.
+- [ ] **A.4** Cursor — port `webkitgtk_producer/cursor.rs`.
+- [ ] **A.5** IME observability — port `webkitgtk_producer/ime.rs`
+      (depends on A.1).
+- [ ] **A.6** Downloads — port `webkitgtk_producer/downloads.rs`
+      (with `NetworkSession::download-started` shape change).
+- [ ] **A.7** Input forwarding — keyboard + mouse + scroll on GTK 4.
+- [ ] **A.8** Settings application — `WebSurfaceSettings` → webkit6.
+- [ ] **A.9** Devtools / inspector window.
