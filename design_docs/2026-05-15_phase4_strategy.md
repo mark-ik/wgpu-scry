@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b shipped; 4c.5.c-f, 4c.6+ in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c shipped; 4c.5.d-f, 4c.6+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -491,7 +491,30 @@ artifact.
         assert + delete) — gated by the `#[ignore]` discipline. Out:
         `set_cookie_change_handler` (separate signal-wiring chunk),
         cookie persistence policy.
-  - [ ] **4c.5.c** Scheme handlers — port `scheme_handler.rs`.
+  - [x] **4c.5.c** Scheme handlers — port `scheme_handler.rs`.
+        Shipped. WPE side mirrors the GTK precedent: `register_all`
+        registers each `(scheme, handler)` pair against a
+        `WebKitWebContext` before the WebView is built; per-request
+        trampoline builds a `WebKitURISchemeResponse` backed by a
+        `glib::Bytes`-owned `GMemoryInputStream` and a soup3
+        `MessageHeaders` block. Empirical findings: (1) WPE 2.52.3
+        `WebKitWebView` accepts `"web-context"` as a construct property
+        (same string the gtk-rs `WebView::with_context` builder uses,
+        verified in webkit2gtk-2.0.2's auto/web_view.rs), so the
+        existing `g_object_new`-based construction in
+        `build_producer_view` extends cleanly — just one more
+        `display`/`network-session`/`web-context` triple plus matching
+        post-construction unrefs. (2) `webkit_web_context_register_uri_scheme`
+        on WPE takes a `GDestroyNotify` 4th arg identical to GTK; the
+        per-scheme `HandlerPayload` box lives until the WebContext is
+        finalized (which happens when the producer's WebView drops),
+        so no explicit teardown on `WpeHandles` is needed. (3) Kept
+        the wpe feature lean by hand-rolling FFI for
+        `g_memory_input_stream_new_from_bytes` rather than pulling
+        `gio`; soup3's `MessageHeaders` is already available through
+        the existing dep so headers go through that. Out: integration
+        smoke (the cross-backend trait test infra doesn't yet cover
+        scheme handlers, and per the brief we defer until it does).
   - [ ] **4c.5.d** Cursor — port `cursor.rs`.
   - [ ] **4c.5.e** IME observability — install `scryIme` handler +
         DOM focusin/focusout/input watcher script + `TextInput*`
