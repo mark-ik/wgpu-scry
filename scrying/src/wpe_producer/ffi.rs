@@ -55,6 +55,41 @@ pub struct WPEEvent {
 pub struct WebKitCookieManager {
     _opaque: [u8; 0],
 }
+#[repr(C)]
+pub struct WebKitWebContext {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct WebKitURISchemeRequest {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct WebKitURISchemeResponse {
+    _opaque: [u8; 0],
+}
+/// Opaque GInputStream — the URI scheme response consumes one. We never
+/// touch the body directly from Rust; the stream is constructed from a
+/// `glib::Bytes` via `g_memory_input_stream_new_from_bytes` and handed
+/// straight to `webkit_uri_scheme_response_new`.
+#[repr(C)]
+pub struct GInputStream {
+    _opaque: [u8; 0],
+}
+
+/// Matches the C `WebKitURISchemeRequestCallback` typedef. Fires once
+/// per page-side fetch of a custom-scheme URI, on the producer's affine
+/// main context. `user_data` is the `Box::into_raw`d trampoline payload;
+/// the registration's `GDestroyNotify` releases it when the WebContext
+/// is finalized.
+pub type WebKitURISchemeRequestCallback = unsafe extern "C" fn(
+    request: *mut WebKitURISchemeRequest,
+    user_data: *mut std::ffi::c_void,
+);
+
+/// Matches the C `GDestroyNotify` typedef. Called once when the
+/// WebContext is finalized (i.e. when the producer drops); reclaims the
+/// boxed scheme-handler payload.
+pub type GDestroyNotify = unsafe extern "C" fn(user_data: *mut std::ffi::c_void);
 /// Opaque on the C side too — every consumer either passes it to a
 /// `*_finish` FFI (which crashes through `_opaque`) or hands it back to
 /// glib through a trampoline. Declaring it as zero-sized is sufficient
@@ -319,4 +354,59 @@ unsafe extern "C" {
         result: *mut GAsyncResult,
         error: *mut *mut glib::ffi::GError,
     ) -> c_int;
+
+    // --- Custom URL scheme handlers (4c.5.c) ---
+    // Signatures verified against
+    // /usr/include/wpe-webkit-2.0/wpe/WebKitWebContext.h,
+    // /usr/include/wpe-webkit-2.0/wpe/WebKitURISchemeRequest.h, and
+    // /usr/include/wpe-webkit-2.0/wpe/WebKitURISchemeResponse.h.
+    // `webkit_web_context_new` is transfer-full; we own one ref after the
+    // call. Passing the resulting context as the `"web-context"` construct
+    // property on the WebView makes the WebView take its own ref; we then
+    // release ours, same shape as the headless `display`/`network-session`
+    // dance in `build_producer_view`.
+    pub fn webkit_web_context_new() -> *mut WebKitWebContext;
+    pub fn webkit_web_context_register_uri_scheme(
+        context: *mut WebKitWebContext,
+        scheme: *const c_char,
+        callback: WebKitURISchemeRequestCallback,
+        user_data: *mut std::ffi::c_void,
+        user_data_destroy_func: Option<GDestroyNotify>,
+    );
+
+    // URI scheme request introspection + completion. `get_uri` is
+    // transfer-none — the request owns the string.
+    pub fn webkit_uri_scheme_request_get_uri(
+        request: *mut WebKitURISchemeRequest,
+    ) -> *const c_char;
+    pub fn webkit_uri_scheme_request_finish_with_response(
+        request: *mut WebKitURISchemeRequest,
+        response: *mut WebKitURISchemeResponse,
+    );
+
+    // URI scheme response construction. `webkit_uri_scheme_response_new`
+    // is transfer-full — the WebKit response object takes a ref on the
+    // input stream, so the caller can drop its own once construction is
+    // done.
+    pub fn webkit_uri_scheme_response_new(
+        input_stream: *mut GInputStream,
+        stream_length: i64,
+    ) -> *mut WebKitURISchemeResponse;
+    pub fn webkit_uri_scheme_response_set_content_type(
+        response: *mut WebKitURISchemeResponse,
+        content_type: *const c_char,
+    );
+    pub fn webkit_uri_scheme_response_set_http_headers(
+        response: *mut WebKitURISchemeResponse,
+        headers: *mut std::ffi::c_void, // SoupMessageHeaders* — passed in transfer-full
+    );
+
+    // GIO memory input stream — backs the URI scheme response body. The
+    // returned `GInputStream*` is transfer-full; `webkit_uri_scheme_response_new`
+    // takes its own ref, so we release ours after handing it over.
+    // Lives in libgio-2.0.so; libwpe-webkit-2.0 already depends on it
+    // transitively, so the symbol is reachable at link time.
+    pub fn g_memory_input_stream_new_from_bytes(
+        bytes: *mut glib::ffi::GBytes,
+    ) -> *mut GInputStream;
 }
