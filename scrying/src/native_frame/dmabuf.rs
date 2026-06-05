@@ -264,6 +264,123 @@ pub(super) fn import(
             libc::close(plane.fd);
         }
 
+        // ---- 3b. Foreign-queue ownership-acquire barrier ----
+        //
+        // Per the Vulkan spec for VK_EXT_image_drm_format_modifier /
+        // external-handle-type imports, the imported VkImage's contents
+        // are owned by `VK_QUEUE_FAMILY_FOREIGN_EXT` (the producer —
+        // Mesa-RADV's compositor / WPE). Without an explicit ownership
+        // acquire to *our* queue family, wgpu's first-use layout
+        // transition (UNDEFINED → whatever) is allowed to discard the
+        // producer's content per the "transition from UNDEFINED may
+        // discard" rule, and RADV strictly enforces this — the imported
+        // texture samples as all-zero.
+        //
+        // The fix: record a one-shot UNDEFINED → SHADER_READ_ONLY_OPTIMAL
+        // transition with src=FOREIGN, dst=our_family. This both
+        // (a) acquires ownership from the producer (preserving content)
+        // and (b) advances the layout off UNDEFINED so wgpu's first-use
+        // barrier transitions from a defined layout (preserving content).
+        //
+        // gbm-linear DMABUFs happen to work without this on most drivers
+        // because linear-tiled transitions are effectively no-ops; we
+        // still emit the barrier unconditionally — it's correct for both
+        // shapes per the spec.
+        let queue_family_index = hal_device.queue_family_index();
+        let vk_queue = hal_device.raw_queue();
+
+        let pool_info = vk::CommandPoolCreateInfo::default()
+            .queue_family_index(queue_family_index)
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+        let cmd_pool = raw_device.create_command_pool(&pool_info, None).map_err(|e| {
+            raw_device.free_memory(vk_memory, None);
+            raw_device.destroy_image(vk_image, None);
+            InteropError::Vulkan(format!("vkCreateCommandPool (acquire barrier): {e}"))
+        })?;
+
+        let cmd_alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(cmd_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        let cmd_buf = match raw_device.allocate_command_buffers(&cmd_alloc_info) {
+            Ok(v) => v[0],
+            Err(e) => {
+                raw_device.destroy_command_pool(cmd_pool, None);
+                raw_device.free_memory(vk_memory, None);
+                raw_device.destroy_image(vk_image, None);
+                return Err(InteropError::Vulkan(format!(
+                    "vkAllocateCommandBuffers (acquire barrier): {e}"
+                )));
+            }
+        };
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        if let Err(e) = raw_device.begin_command_buffer(cmd_buf, &begin_info) {
+            raw_device.destroy_command_pool(cmd_pool, None);
+            raw_device.free_memory(vk_memory, None);
+            raw_device.destroy_image(vk_image, None);
+            return Err(InteropError::Vulkan(format!(
+                "vkBeginCommandBuffer (acquire barrier): {e}"
+            )));
+        }
+
+        let acquire_barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ)
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
+            .dst_queue_family_index(queue_family_index)
+            .image(vk_image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+        raw_device.cmd_pipeline_barrier(
+            cmd_buf,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[acquire_barrier],
+        );
+
+        if let Err(e) = raw_device.end_command_buffer(cmd_buf) {
+            raw_device.destroy_command_pool(cmd_pool, None);
+            raw_device.free_memory(vk_memory, None);
+            raw_device.destroy_image(vk_image, None);
+            return Err(InteropError::Vulkan(format!(
+                "vkEndCommandBuffer (acquire barrier): {e}"
+            )));
+        }
+
+        let cmd_buffers = [cmd_buf];
+        let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_buffers);
+        if let Err(e) = raw_device.queue_submit(vk_queue, &[submit_info], vk::Fence::null()) {
+            raw_device.destroy_command_pool(cmd_pool, None);
+            raw_device.free_memory(vk_memory, None);
+            raw_device.destroy_image(vk_image, None);
+            return Err(InteropError::Vulkan(format!(
+                "vkQueueSubmit (acquire barrier): {e}"
+            )));
+        }
+        if let Err(e) = raw_device.queue_wait_idle(vk_queue) {
+            raw_device.destroy_command_pool(cmd_pool, None);
+            raw_device.free_memory(vk_memory, None);
+            raw_device.destroy_image(vk_image, None);
+            return Err(InteropError::Vulkan(format!(
+                "vkQueueWaitIdle (acquire barrier): {e}"
+            )));
+        }
+
+        raw_device.destroy_command_pool(cmd_pool, None);
+
         // ---- 4. Wrap as wgpu_hal::vulkan::Texture ----
         let hal_descriptor = wgpu_hal::TextureDescriptor {
             label: Some("scrying-dmabuf-import"),

@@ -20,8 +20,8 @@
 use dpi::PhysicalSize;
 use scrying::wpe_producer::{WpeProducer, WpeProducerConfig};
 use scrying::{
-    DmaBufImage, HostWgpuContext, ImportOptions, NativeFrame, NavigationEvent, SyncMechanism,
-    TextureImporter, WebSurfaceFrame, WebSurfaceProducer, WgpuTextureImporter,
+    DmaBufImage, HostWgpuContext, ImportOptions, ImportedTexture, NativeFrame, NavigationEvent,
+    SyncMechanism, TextureImporter, WebSurfaceFrame, WebSurfaceProducer, WgpuTextureImporter,
 };
 
 #[test]
@@ -132,7 +132,7 @@ fn wpe_to_vulkan_round_trip() {
     }
 
     // --- 4. Stand up the wgpu Vulkan DMABUF-capable host ---
-    let (_device, _queue, host) = match make_vulkan_host() {
+    let (device, queue, host) = match make_vulkan_host() {
         Some(triple) => triple,
         None => {
             // SKIP message already printed inside make_vulkan_host.
@@ -172,18 +172,8 @@ fn wpe_to_vulkan_round_trip() {
         Ok(t) => t,
         Err(e) => {
             panic!(
-                "FAIL: import_frame errored on real WPE buffer: {e}\n\n\
-                 This is the actionable signal: Phase 4a's importer at \
-                 native_frame/dmabuf.rs:69-83 EXPLICITLY DEFERS frame.planes.len() > 1 \
-                 with NativeImportNotYetImplemented. WPE on AMD/Mesa-RADV emits a \
-                 2-plane DCC-tiled BGRA buffer (single sampleable image + DCC aux \
-                 metadata plane) — this is the RGBA-with-aux multi-plane case, \
-                 DISTINCT from the YUV ycbcr-conversion case the existing comment \
-                 there discusses. The fix is to extend dmabuf::import to feed \
-                 per-plane VkImageDrmFormatModifierExplicitCreateInfoEXT plane \
-                 layouts + chained VkBindImagePlaneMemoryInfo for non-YUV \
-                 multi-plane modifiers. See 4c.2 retrospective + 2026-06-04 \
-                 round-trip spec for context."
+                "FAIL: import_frame errored — phase 4a.x multi-plane DCC import \
+                 should accept this WPE buffer. Error: {e}"
             );
         }
     };
@@ -196,6 +186,163 @@ fn wpe_to_vulkan_round_trip() {
         "wpe→vk: imported texture {}x{} format={:?} gen={}",
         imported.size.width, imported.size.height, imported.format, imported.generation
     );
+
+    // --- 7. Pixel-correctness sampling (DIAGNOSTIC ONLY) ---
+    //
+    // Reads a 64×64 center patch of the imported texture and PRINTS what
+    // BGRA values came back. Does NOT assert against expected dodger-blue
+    // (#1e90ff → sRGB-encoded ~B=255, G=144, R=30) because of a known
+    // upstream wgpu API gap that bites Vulkan DMABUF imports specifically:
+    //
+    //   `wgpu_core::device::resource.rs:1253` (wgpu 29.0.3) inserts every
+    //   `create_texture_from_hal` texture into the tracker with
+    //   `TextureUses::UNINITIALIZED`, which `derive_image_layout()`
+    //   resolves to `vk::ImageLayout::UNDEFINED`. wgpu's first-use
+    //   barrier therefore transitions `UNDEFINED → TRANSFER_SRC_OPTIMAL`
+    //   for `copy_texture_to_buffer`, and the Vulkan spec allows that
+    //   transition to discard contents. RADV honors that allowance on
+    //   the DCC modifier `0x020000044051ba01`; gbm-linear in the sibling
+    //   `tests/dmabuf_roundtrip.rs` happens to work because linear-tile
+    //   transitions are effectively no-ops on most drivers.
+    //
+    // Five layout/access combinations on our own foreign-queue acquire
+    // barrier (UNDEFINED→SHADER_READ_ONLY_OPTIMAL / GENERAL /
+    // TRANSFER_SRC_OPTIMAL × FOREIGN_EXT/IGNORED) all returned the same
+    // all-zero readback because wgpu's tracker doesn't see our
+    // intermediate layout — the spec-correct fix is a wgpu API addition
+    // letting consumers tell the tracker the initial state of an
+    // externally-imported texture.
+    //
+    // Until that lands upstream, this test:
+    //   - Asserts import shape (size + format + dimensions) — Step 6 above.
+    //   - Logs observed BGRA so when wgpu DOES expose initial-state, this
+    //     test will flip to assertion mode with one tiny change.
+    //   - Keeps the foreign-queue acquire barrier in `dmabuf::import`:
+    //     spec-correct, no-op for gbm-linear, ready to deliver pixels the
+    //     moment wgpu lands the API.
+    //
+    // The macOS and Windows backends sidestep this entirely: Metal's
+    // `MTLTexture*` and D3D12's `RESOURCE_STATE_COMMON` both preserve
+    // contents on import without requiring an initial-state declaration.
+    // Vulkan's `UNDEFINED-discards` rule is the asymmetric one.
+    let bytes = read_back_center_region(
+        &device, &queue, &imported, expected_size.width, expected_size.height,
+    );
+    let expected = [0xFFu8, 0x90, 0x1E, 0xFF]; // B, G, R, A for dodger-blue
+    let tolerance: i32 = 8;
+    let mut bad_pixels = 0usize;
+    let mut first_bad: Option<(usize, [u8; 4])> = None;
+    for (idx, px) in bytes.chunks_exact(4).enumerate() {
+        let off = px.iter()
+            .zip(expected.iter())
+            .any(|(g, e)| (*g as i32 - *e as i32).abs() > tolerance);
+        if off {
+            bad_pixels += 1;
+            if first_bad.is_none() {
+                first_bad = Some((idx, [px[0], px[1], px[2], px[3]]));
+            }
+        }
+    }
+    let total = 64 * 64;
+    if bad_pixels == 0 {
+        eprintln!(
+            "wpe→vk: pixel-correctness OK (64×64 center sample all within ±{} of BGRA={:?}) \
+             — upstream wgpu API gap appears resolved; this test can flip to assert!",
+            tolerance, expected
+        );
+    } else {
+        let (idx, bytes) = first_bad.unwrap_or((0, [0; 4]));
+        eprintln!(
+            "wpe→vk: pixel-correctness DIAGNOSTIC — {}/{} center pixels diverged from \
+             dodger-blue ±{}; first divergent px at index {} = BGRA{:?} (expected {:?}). \
+             Expected while wgpu's create_texture_from_hal lacks an initial-state API; \
+             see comment above. Import shape (size + format) was asserted in Step 6.",
+            bad_pixels, total, tolerance, idx, bytes, expected
+        );
+    }
+}
+
+/// Read back a small center region of the imported texture as raw
+/// BGRA bytes (4 bytes per pixel, untransformed). Mirrors the readback
+/// shape from `tests/dmabuf_roundtrip.rs::read_back_texture` but reads
+/// a smaller region — the WPE-rendered background is uniform so a
+/// 64×64 center sample is representative and keeps the readback buffer
+/// small (16 KiB instead of ~3 MiB for the full 1024×768).
+///
+/// `bytes_per_row` is aligned up to wgpu's 256-byte requirement; the
+/// returned Vec drops the row padding so caller code can index by
+/// `row * SAMPLE_W * 4 + col * 4`.
+fn read_back_center_region(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    imported: &ImportedTexture,
+    full_width: u32,
+    full_height: u32,
+) -> Vec<u8> {
+    const SAMPLE_W: u32 = 64;
+    const SAMPLE_H: u32 = 64;
+    let bytes_per_row = ((SAMPLE_W * 4 + 255) / 256) * 256;
+    let readback_size = (bytes_per_row as u64) * (SAMPLE_H as u64);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("wpe_roundtrip_readback"),
+        size: readback_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("wpe_roundtrip_readback_encoder"),
+    });
+    let center_x = full_width / 2 - SAMPLE_W / 2;
+    let center_y = full_height / 2 - SAMPLE_H / 2;
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &imported.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: center_x, y: center_y, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(SAMPLE_H),
+            },
+        },
+        wgpu::Extent3d {
+            width: SAMPLE_W,
+            height: SAMPLE_H,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let buffer_slice = readback.slice(..);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .expect("device poll");
+    receiver
+        .recv()
+        .expect("map_async sender dropped")
+        .expect("map_async failed");
+
+    let mapped = buffer_slice.get_mapped_range();
+    let mut bytes = Vec::with_capacity((SAMPLE_W as usize) * (SAMPLE_H as usize) * 4);
+    for row in 0..SAMPLE_H as usize {
+        let row_start = row * (bytes_per_row as usize);
+        let row_end = row_start + (SAMPLE_W as usize) * 4;
+        bytes.extend_from_slice(&mapped[row_start..row_end]);
+    }
+    drop(mapped);
+    readback.unmap();
+    bytes
 }
 
 /// Close producer-owned dup'd fds on a `DmaBufImage` that was never
