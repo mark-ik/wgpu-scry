@@ -21,6 +21,8 @@ mod ffi;
 #[cfg(feature = "wpe")]
 mod headless;
 #[cfg(feature = "wpe")]
+mod ime;
+#[cfg(feature = "wpe")]
 mod input;
 #[cfg(feature = "wpe")]
 mod navigation;

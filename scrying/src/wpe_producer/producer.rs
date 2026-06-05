@@ -157,6 +157,7 @@ impl WpeProducer {
             std::collections::VecDeque::new(),
         ));
         super::script_message::install(&webview, web_messages.clone());
+        super::ime::install(&webview, nav_state.clone());
         let cursor_shape: std::rc::Rc<
             std::cell::RefCell<Option<crate::CursorShape>>,
         > = std::rc::Rc::new(std::cell::RefCell::new(None));
