@@ -9,9 +9,10 @@ use webkit6::gtk;
 use webkit6::gtk::prelude::*;
 use webkit6::{NetworkSession, UserContentManager, WebContext, WebView};
 
-use crate::{UrlSchemeHandlerFn, WebSurfaceCapabilities, WebSurfaceError};
+use crate::{CursorShape, UrlSchemeHandlerFn, WebSurfaceCapabilities, WebSurfaceError};
 
 use super::config::WebKit6ProducerConfig;
+use super::cursor;
 use super::helpers::ensure_gtk_init;
 use super::navigation::{NavState, install_load_signals};
 use super::scheme_handler;
@@ -39,6 +40,11 @@ pub struct WebKit6Producer {
     /// [`Self::wait_for_web_message`]. Installed by
     /// [`super::script_message::install`] in [`Self::new`].
     pub(crate) web_messages: Rc<RefCell<VecDeque<String>>>,
+    /// Latest cursor shape reported by `mouse-target-changed`. Drained
+    /// by [`crate::WebSurfaceProducer::poll_cursor_shape`] or pumped
+    /// via [`Self::wait_for_cursor_shape`]. Installed by
+    /// [`super::cursor::install`] in [`Self::new_with_url_schemes`].
+    pub(crate) cursor_shape: Rc<RefCell<Option<CursorShape>>>,
 }
 
 impl WebKit6Producer {
@@ -131,6 +137,9 @@ impl WebKit6Producer {
             Rc::new(RefCell::new(VecDeque::new()));
         script_message::install(&ucm, &web_messages);
 
+        let cursor_shape: Rc<RefCell<Option<CursorShape>>> = Rc::new(RefCell::new(None));
+        cursor::install(&webview, &cursor_shape);
+
         Ok(Self {
             capabilities: super::linux_webkit6_capabilities(),
             webview,
@@ -142,6 +151,7 @@ impl WebKit6Producer {
             generation: Cell::new(0),
             nav_state,
             web_messages,
+            cursor_shape,
         })
     }
 

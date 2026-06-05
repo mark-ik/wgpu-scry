@@ -30,6 +30,7 @@
 mod capture;
 mod config;
 mod cookies;
+mod cursor;
 mod helpers;
 mod navigation;
 mod producer;

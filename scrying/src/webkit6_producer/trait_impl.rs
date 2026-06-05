@@ -7,8 +7,8 @@ use webkit6::gtk::prelude::*;
 use webkit6::prelude::*;
 
 use crate::{
-    NavigationEvent, WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame, WebSurfaceMode,
-    WebSurfaceProducer,
+    CursorShape, NavigationEvent, WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame,
+    WebSurfaceMode, WebSurfaceProducer,
 };
 
 use super::navigation::{arm_navigation, wait_for_load};
@@ -92,5 +92,9 @@ impl WebSurfaceProducer for WebKit6Producer {
 
     fn poll_web_message(&mut self) -> Option<String> {
         self.web_messages.borrow_mut().pop_front()
+    }
+
+    fn poll_cursor_shape(&mut self) -> Option<CursorShape> {
+        self.cursor_shape.borrow_mut().take()
     }
 }
