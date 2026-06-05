@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 shipped; 4c.5.f, 4c.6 in flight; A.5–A.9 queued.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 + A.5 shipped; 4c.5.f, 4c.6 in flight; A.6–A.9 queued.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -674,8 +674,19 @@ A.1 (script-message bridge — same shared UCM).
       an inherent method on the auto-binding. `wait_for_cursor_shape`
       pumps via `glib::MainContext::default().iteration(false)`,
       matching the A.1 `wait_for_web_message` pattern.
-- [ ] **A.5** IME observability — port `webkitgtk_producer/ime.rs`
-      (depends on A.1).
+- [x] **A.5** IME observability — `ime.rs` ported from the GTK 3
+      precedent. Second script-message handler `scryIme` on the same
+      `UserContentManager` the A.1 `scry` bridge uses; the verbatim
+      IME observer user script (focusin/focusout/input/selectionchange
+      → pipe-delimited payload) and `parse_event` carried over
+      unchanged from the GTK 3 / WPE precedents. Cleaner than the WPE
+      port — webkit6's auto-bound `connect_script_message_received`
+      delivers `&javascriptcore::Value` directly (no hand-rolled
+      `RustClosure`/`jsc_value_to_string` FFI). Same 5 pure-Rust
+      parse-event tests the WPE port has (blur, full focus, full
+      change, password focus, malformed). Producer construction calls
+      `ime::install(&ucm, &nav_state)` right after
+      `script_message::install`.
 - [ ] **A.6** Downloads — port `webkitgtk_producer/downloads.rs`
       (with `NetworkSession::download-started` shape change).
 - [ ] **A.7** Input forwarding — keyboard + mouse + scroll on GTK 4.
