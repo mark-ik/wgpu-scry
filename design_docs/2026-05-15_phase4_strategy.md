@@ -378,11 +378,19 @@ artifact.
       `RustClosure::new_local` over `&[glib::Value]` extracting via
       `.get::<i32>()`. (b) WPE auto-paints on resize (no renavigate
       fallback needed). (c) The headless toplevel silently coerces all
-      dimensions to 1024×768 — `wpe_toplevel_resize` returns TRUE but
-      rendered size doesn't change. `resize()` is currently a shape
-      no-op on headless; honoring requested size needs additional WPE
-      API (likely `wpe_view_resized` or toplevel-state changes), tracked
-      for 4c.4+.
+      dimensions to 1024×768. Follow-up investigation (commit `b22ad55`)
+      proved this is a WPE 2.52.3 headless-platform limitation: the
+      `WPEToplevelHeadless` class's `resize` vfunc is unimplemented, so
+      `wpe_toplevel_resize` returns TRUE but the underlying dimensions
+      don't change. Calling `wpe_view_resized` afterward DOES trigger a
+      buffer-rendered repaint (so the producer is responsive to the
+      attempt), but the repaint stays at the default size. Honoring
+      requested dimensions on the headless display requires either
+      subclassing `WPEToplevel` ourselves (substantial GObject work) or
+      waiting on a non-headless WPE producer for hosted use cases. The
+      WebKitGTK / WebKit6 producers don't have this constraint; the
+      call-shape `WpeProducer::resize` now ships (toplevel resize → view
+      notify) is correct for them and dormant on headless.
 - [x] **4c.4** Input forwarding MVP — keyboard + mouse-pointer +
       scroll via `wpe_view_event(WPEEvent*)`. Real
       `send_keyboard_input` / `send_mouse_input` / `send_pointer_input`
