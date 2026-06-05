@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e shipped; 4c.5.f, 4c.6+ in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 shipped; 4c.5.f, 4c.6, 4c.8 in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -553,6 +553,41 @@ artifact.
         blur, focus, change, password, malformed.
   - [ ] **4c.5.f** Downloads — port `downloads.rs`.
 - [ ] **4c.6** `demo-wpe` runtime probe — mirrors demo-linux
-- [ ] **4c.7** `docs/wpe-deployment.md` — Flatpak SDK manifest
-      walkthrough
+- [x] **4c.7** `docs/wpe-deployment.md` — practical WPE deployment
+      guide for Linux. Covers prerequisites (WPEWebKit 2.52.3, philn
+      COPR with F44 URL-install workaround for the pruned engine RPM,
+      Wayland + Vulkan runtime), building (`--features wpe`, the glib
+      0.18 / soup3 0.5 / libc dep list, coexistence with
+      `webkitgtk-fallback`, incompatibility with `webkit6`), running
+      (`demo-wpe` flags + `tests/wpe_input.rs` invocation), the
+      architectural constraints that fall out of WebKit + WPE's process
+      model (thread-affine producer, one display per process, DMABUF-
+      only frame contract, plane-fd ownership transfer with importer +
+      manual-close discipline), the headless-platform caveats
+      (`WPEToplevelHeadless::resize` is an unimplemented vfunc so
+      `wpe_toplevel_resize` is a no-op; touch dispatch through
+      `wpe_view_event` blocks in `futex_do_wait` waiting on
+      `WPEGestureController`/`WPEScreen` state headless doesn't
+      provide; cookie-change handlers / scheme handlers / cursor hover
+      have only unit-test coverage on this target), the WPE 2.0 API
+      deviations from WebKitGTK (`download-started` lives on
+      `WebKitNetworkSession` under `ENABLE_2022_GLIB_API` not
+      `WebKitWebContext`; `webkit_download_set_destination` enforces
+      `g_path_is_absolute` and rejects `file://` URIs; `chrome.webview`
+      JS shim + `scry` / `scryIme` native handler-name conventions),
+      the wgpu 29.0.3 `texture_from_raw` initial-state gap that
+      diagnostic-modes `wpe_to_vulkan_roundtrip`'s pixel-correctness
+      assertion (foreign-queue acquire barrier is spec-correct + ships
+      dormant, gbm-linear passes by accident, RADV DCC tiled samples
+      all-zero until wgpu exposes the API), and a troubleshooting
+      section covering the realistic first-run failures
+      (`WpeProducer::new` returning null on no-GPU / no-Wayland
+      shells, `pkg-config wpe-webkit-2.0` failing when the engine RPM
+      isn't direct-URL-installed, glib version-tree conflicts when
+      `wpe` + `webkit6` are both enabled, `--snapshot-test` timing
+      out from a silent navigation failure, multi-producer SIGABRT).
+      Flatpak SDK manifest walkthrough deferred — consumer
+      distribution is the consumer's responsibility, and the producer
+      makes no assumption about install path beyond the pkg-config
+      visibility `build.rs` enforces.
 - [ ] **4c.8** Parity matrix + README updates
