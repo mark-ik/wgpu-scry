@@ -29,6 +29,7 @@
 
 mod capture;
 mod config;
+mod cookies;
 mod helpers;
 mod navigation;
 mod producer;
