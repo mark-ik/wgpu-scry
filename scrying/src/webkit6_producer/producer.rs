@@ -1,7 +1,7 @@
 //! [`WebKit6Producer`] struct, construction, Drop.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use dpi::PhysicalSize;
@@ -9,11 +9,12 @@ use webkit6::gtk;
 use webkit6::gtk::prelude::*;
 use webkit6::{NetworkSession, UserContentManager, WebContext, WebView};
 
-use crate::{WebSurfaceCapabilities, WebSurfaceError};
+use crate::{UrlSchemeHandlerFn, WebSurfaceCapabilities, WebSurfaceError};
 
 use super::config::WebKit6ProducerConfig;
 use super::helpers::ensure_gtk_init;
 use super::navigation::{NavState, install_load_signals};
+use super::scheme_handler;
 use super::script_message;
 
 /// Linux WebKitGTK 6.0 producer. Hosts a `WebKitWebView` inside a
@@ -47,6 +48,18 @@ impl WebKit6Producer {
     /// hidden top-level `gtk4::Window`, and wires load-event
     /// signal handlers.
     pub fn new(config: WebKit6ProducerConfig) -> Result<Self, WebSurfaceError> {
+        Self::new_with_url_schemes(config, HashMap::new())
+    }
+
+    /// Construct the producer with custom URL scheme handlers
+    /// registered against the producer's `WebContext` before the
+    /// `WebView` is built — so the very first navigation can already
+    /// resolve `myapp://...` URIs. Mirrors the GTK 3 producer's
+    /// `new_with_url_schemes` constructor.
+    pub fn new_with_url_schemes(
+        config: WebKit6ProducerConfig,
+        url_schemes: HashMap<String, UrlSchemeHandlerFn>,
+    ) -> Result<Self, WebSurfaceError> {
         ensure_gtk_init()?;
 
         if config.size.width == 0 || config.size.height == 0 {
@@ -69,6 +82,15 @@ impl WebKit6Producer {
         let data_dir_str = config.data_dir.to_string_lossy().to_string();
         let network_session = NetworkSession::new(Some(&data_dir_str), Some(&data_dir_str));
         let context = WebContext::new();
+        // Custom URL scheme handlers must be registered on the
+        // WebContext BEFORE the WebView is built, so the very first
+        // navigation can already resolve registered schemes. webkit6
+        // keeps `register_uri_scheme` on `WebContext` (unlike cookies
+        // and downloads, which moved to `NetworkSession` under the
+        // 2022 GLib API).
+        if !url_schemes.is_empty() {
+            scheme_handler::register_all(&context, url_schemes);
+        }
         // Build an explicit `UserContentManager` so the JS-messaging
         // bridge has a stable handle to register handlers + inject
         // user scripts against. `WebView::builder().user_content_manager(...)`

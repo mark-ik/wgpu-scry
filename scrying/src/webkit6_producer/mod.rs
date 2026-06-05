@@ -33,6 +33,7 @@ mod cookies;
 mod helpers;
 mod navigation;
 mod producer;
+mod scheme_handler;
 mod script_message;
 mod trait_impl;
 
