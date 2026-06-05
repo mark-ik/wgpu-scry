@@ -25,7 +25,7 @@ webkit6 = ["dep:gtk4", "dep:webkit6"]
 # Requires WPEWebKit dev libs at build time (Fedora 44):
 #   sudo dnf install -y wpewebkit-devel libwpe-devel wpebackend-fdo-devel
 # Links libWPEWebKit-2.0.so via pkg-config (wpe-webkit-2.0) in build.rs.
-wpe = ["dep:glib"]
+wpe = ["dep:glib", "dep:soup"]
 
 [dependencies]
 dpi.workspace = true
