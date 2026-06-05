@@ -437,8 +437,19 @@ artifact.
       surface), but no producer needs to do anything beyond that. The
       WPE producer's `impl WebSurfaceProducer` carries a guardrail
       comment in `producer.rs` documenting this stance.
-- [ ] **4c.4.3** IME composition via `WPEInputMethodContext` (or the
-      WPE-platform equivalent).
+- [x] **4c.4.3** IME composition — investigated and resolved as
+      "absorbed into 4c.5." scrying's IME design across all backends
+      is **JS-side observability**, not native `WebKitInputMethodContext`
+      plumbing. WebKitGTK's `ime.rs` (156 lines) installs a `scryIme`
+      `UserContentManager` script-message handler + a user script
+      watching `focusin`/`focusout`/`input`/`selectionchange`, then
+      surfaces results as `NavigationEvent::TextInput{Focused,Changed,Blurred}`
+      payloads for the host's IM widget to consume (winit's
+      `set_ime_cursor_area`, etc.). The producer trait has no
+      `send_ime_input` — IME flows back through the nav-event queue.
+      WPE's WebKitWebView exposes the same primitives (`UserContentManager`,
+      script-message handlers) — the implementation lands when 4c.5's
+      script-message bridge does. Not a standalone WPE-only sub-phase.
 - [ ] **4c.5** Phase 2b–2e surface ported from
       `webkitgtk_producer/` (cookies, schemes, popups, downloads,
       cursor, IME state).
