@@ -6,6 +6,7 @@ members = [
     "demo-mac",
     "demo-linux",
     "demo-linux6",
+    "demo-wpe",
 ]
 resolver = "3"
 

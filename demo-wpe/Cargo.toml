@@ -1,0 +1,23 @@
+[package]
+name = "demo-wpe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Linux WPEWebKit (WPEPlatform headless) runtime probe for scrying"
+
+[[bin]]
+name = "demo-wpe"
+path = "src/main.rs"
+
+[dependencies]
+dpi = "0.1.2"
+scrying = { path = "../scrying", features = ["wpe"] }
+
+# Used to pump the GLib main context between frame-acquire retries
+# (same shape as `scrying/tests/wpe_input.rs::acquire_with_pump`),
+# and to close DMABUF plane fds via `libc::close` before exit. Both
+# crates are already in the workspace dependency graph via scrying's
+# `wpe` feature + linux target deps; listing them here just makes
+# them directly nameable from this binary.
+glib = "0.18"
+libc = "0.2"
