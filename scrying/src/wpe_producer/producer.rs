@@ -63,6 +63,16 @@ pub struct WpeProducer {
     #[cfg(feature = "wpe")]
     pub(super) web_messages:
         std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<String>>>,
+    /// Latest [`crate::CursorShape`] reported by the WebView's
+    /// `mouse-target-changed` signal, drained by `poll_cursor_shape`
+    /// (trait) or `wait_for_cursor_shape` (inherent). Single-slot:
+    /// successive moves over the same element are de-duplicated by
+    /// the install closure so the slot only churns on genuine context
+    /// changes. Single-threaded RefCell — closure and drainers both
+    /// run on the producer's main-context thread.
+    #[cfg(feature = "wpe")]
+    pub(super) cursor_shape:
+        std::rc::Rc<std::cell::RefCell<Option<crate::CursorShape>>>,
 }
 
 /// The single-slot frame channel a producer's render callback writes into.
@@ -147,6 +157,10 @@ impl WpeProducer {
             std::collections::VecDeque::new(),
         ));
         super::script_message::install(&webview, web_messages.clone());
+        let cursor_shape: std::rc::Rc<
+            std::cell::RefCell<Option<crate::CursorShape>>,
+        > = std::rc::Rc::new(std::cell::RefCell::new(None));
+        super::cursor::install(&webview, &cursor_shape);
         let producer = Self {
             capabilities: super::linux_wpe_capabilities(),
             size: config.size,
@@ -156,6 +170,7 @@ impl WpeProducer {
             handles: WpeHandles { webview, view, toplevel, main_context },
             nav_state,
             web_messages,
+            cursor_shape,
         };
         // Wire the WPEView frame seam now that the producer (and thus its
         // shared FrameSink) exists. The closure captures a FrameSink clone and
@@ -583,6 +598,13 @@ impl WebSurfaceProducer for WpeProducer {
     fn poll_web_message(&mut self) -> Option<String> {
         #[cfg(feature = "wpe")] {
             self.web_messages.borrow_mut().pop_front()
+        }
+        #[cfg(not(feature = "wpe"))] { None }
+    }
+
+    fn poll_cursor_shape(&mut self) -> Option<crate::CursorShape> {
+        #[cfg(feature = "wpe")] {
+            self.cursor_shape.borrow_mut().take()
         }
         #[cfg(not(feature = "wpe"))] { None }
     }
