@@ -423,9 +423,20 @@ artifact.
       class of headless-platform limitation as (β) resize. Mouse + pen
       paths unaffected; touch end-to-end belongs in a non-headless
       target or behind a producer-provided `wpe_view_set_gesture_controller`.
-- [ ] **4c.4.2** Drag input — investigate whether WPE exposes a
-      drag-and-drop signal surface or whether HTML5 DOM events need
-      JS-bridge injection.
+- [x] **4c.4.2** Drag input — investigated and resolved as
+      "intentionally Unsupported." Drag-from-host into a webview is a
+      *capture-mode-wide limitation* shared by macOS (which documents
+      it precisely: `NSDraggingInfo` synthesis requires SPI;
+      overlay-mode works via AppKit's responder chain without
+      producer involvement) and Windows (whose webview2 producer
+      similarly leaves the trait default in place). WPE has no
+      overlay mode at all (the producer is purely offscreen/headless),
+      so the gap is structural. The producer trait keeps
+      `send_drag_input` available for a future host that injects
+      HTML5 drag/drop DOM events through the JS message bridge (a 4c.5
+      surface), but no producer needs to do anything beyond that. The
+      WPE producer's `impl WebSurfaceProducer` carries a guardrail
+      comment in `producer.rs` documenting this stance.
 - [ ] **4c.4.3** IME composition via `WPEInputMethodContext` (or the
       WPE-platform equivalent).
 - [ ] **4c.5** Phase 2b–2e surface ported from

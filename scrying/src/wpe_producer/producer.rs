@@ -468,9 +468,19 @@ impl WebSurfaceProducer for WpeProducer {
     }
 
     // `send_drag_input` intentionally falls through to the trait default
-    // (`Err(Unsupported)`); deferred to 4c.4.2. WPE has no first-class drag
-    // event surface — the design will likely route through HTML5 DOM events
-    // injected via the JS message bridge that lands in 4c.5.
+    // (`Err(Unsupported)`). This matches macOS and Windows: drag-from-host
+    // into a webview is a capture-mode-wide limitation across all of
+    // scrying's backends. The macOS `wkwebview_producer::trait_impl`
+    // documents the constraint precisely: "capture-mode drag forwarding
+    // requires NSDraggingInfo synthesis (SPI); overlay-mode drag works
+    // automatically through AppKit's responder chain without producer
+    // involvement." Windows' `webview2_composition_producer` similarly
+    // leaves the default in place. WPE has no overlay mode at all (the
+    // producer is purely offscreen/headless today), so the capture-mode
+    // gap is structural, not a feature to implement here. When a future
+    // host needs OS-level drag-from-host semantics it'll have to inject
+    // HTML5 drag/drop DOM events through the JS message bridge (a 4c.5
+    // surface) — the producer trait is reserved for that approach.
 }
 
 #[cfg(test)]
