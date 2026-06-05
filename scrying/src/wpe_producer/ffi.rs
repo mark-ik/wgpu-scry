@@ -59,6 +59,16 @@ pub struct WebKitCookieManager {
 pub struct WebKitWebContext {
     _opaque: [u8; 0],
 }
+/// Opaque WebKitHitTestResult — the GObject arg the
+/// `mouse-target-changed` signal hands us alongside the modifiers
+/// bitmask. We only ever call `webkit_hit_test_result_get_context`
+/// on it, so the body stays zero-sized. Verified against
+/// `/usr/include/wpe-webkit-2.0/wpe/WebKitHitTestResult.h` —
+/// WEBKIT_DECLARE_FINAL_TYPE (WebKitHitTestResult, ..., GObject).
+#[repr(C)]
+pub struct WebKitHitTestResult {
+    _opaque: [u8; 0],
+}
 #[repr(C)]
 pub struct WebKitURISchemeRequest {
     _opaque: [u8; 0],
@@ -303,6 +313,16 @@ unsafe extern "C" {
         y: f64,
     ) -> *mut WPEEvent;
     pub fn wpe_view_event(view: *mut WPEView, event: *mut WPEEvent);
+
+    // --- Cursor-shape hit-test (4c.5.d) ---
+    // `mouse-target-changed` hands the closure a WebKitHitTestResult
+    // whose context bitmask we map to crate::CursorShape. Signature
+    // verified against
+    // /usr/include/wpe-webkit-2.0/wpe/WebKitHitTestResult.h:
+    //   guint webkit_hit_test_result_get_context (WebKitHitTestResult *);
+    pub fn webkit_hit_test_result_get_context(
+        hit_test_result: *mut WebKitHitTestResult,
+    ) -> u32;
 
     // --- Cookie store (4c.5.b) ---
     // Both getters are transfer-none — the WebView owns its network
