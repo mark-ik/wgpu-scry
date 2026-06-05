@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a shipped; 4c.5.b-f, 4c.6+ in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b shipped; 4c.5.c-f, 4c.6+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -468,7 +468,29 @@ artifact.
         directly to the `RustClosure::new_local` over `&[glib::Value]`
         pattern (same shape as `navigation.rs`'s load-changed handler);
         extracts the string via `jsc_value_to_string` + `g_free`.
-  - [ ] **4c.5.b** Cookies — port `webkitgtk_producer/cookies.rs`.
+  - [x] **4c.5.b** Cookies — port of `webkitgtk_producer/cookies.rs`
+        landed in `scrying/src/wpe_producer/cookies.rs`. Inherent
+        `request_cookies_for_url` / `set_cookie` / `delete_cookie` on
+        `WpeProducer`; cookie manager borrowed transfer-none on demand
+        off the WebView via
+        `webkit_web_view_get_network_session ->
+        webkit_network_session_get_cookie_manager`, so no cookie state
+        lives on `WpeProducer` itself. Three trampolines bridge the
+        GAsync APIs into sync calls by pumping the producer's
+        `MainContext` (`headless::pump_until`) until an
+        `Rc<RefCell<Option<...>>>` cell fills. Translators
+        (`soup_to_scry`, `scry_to_soup`) verbatim from the GTK
+        precedent. Empirical findings: (1) `soup3 = "0.5"` pin
+        coexists cleanly with the existing `webkitgtk-fallback`
+        transitive — same version, no resolver split. (2) All eight
+        FFI symbols exist on WPEWebKit 2.52.3 (verified in
+        `/usr/include/wpe-webkit-2.0/wpe/WebKit{WebView,
+        NetworkSession,CookieManager}.h`); no fallback to a
+        construction-time session ref needed. Smoke is the cookie
+        round-trip extension to `tests/wpe_input.rs` (set + get +
+        assert + delete) — gated by the `#[ignore]` discipline. Out:
+        `set_cookie_change_handler` (separate signal-wiring chunk),
+        cookie persistence policy.
   - [ ] **4c.5.c** Scheme handlers — port `scheme_handler.rs`.
   - [ ] **4c.5.d** Cursor — port `cursor.rs`.
   - [ ] **4c.5.e** IME observability — install `scryIme` handler +
