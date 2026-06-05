@@ -59,6 +59,32 @@ pub struct WebKitCookieManager {
 pub struct WebKitWebContext {
     _opaque: [u8; 0],
 }
+/// Opaque WebKitDownload — the GObject the `download-started` signal
+/// hands to its closure, and the recipient of per-download signal
+/// connections (`received-data`, `finished`, `failed`). Verified
+/// against `/usr/include/wpe-webkit-2.0/wpe/WebKitDownload.h`:
+/// `WEBKIT_DECLARE_FINAL_TYPE(WebKitDownload, ..., GObject)`.
+#[repr(C)]
+pub struct WebKitDownload {
+    _opaque: [u8; 0],
+}
+/// Opaque WebKitURIRequest — accessed only through
+/// `webkit_uri_request_get_uri` from the download lifecycle bridge.
+/// Verified against
+/// `/usr/include/wpe-webkit-2.0/wpe/WebKitURIRequest.h`.
+#[repr(C)]
+pub struct WebKitURIRequest {
+    _opaque: [u8; 0],
+}
+/// Opaque WebKitURIResponse — accessed only through
+/// `webkit_uri_response_get_suggested_filename` and
+/// `webkit_uri_response_get_content_length` from the download
+/// lifecycle bridge. Verified against
+/// `/usr/include/wpe-webkit-2.0/wpe/WebKitURIResponse.h`.
+#[repr(C)]
+pub struct WebKitURIResponse {
+    _opaque: [u8; 0],
+}
 /// Opaque WebKitHitTestResult — the GObject arg the
 /// `mouse-target-changed` signal hands us alongside the modifiers
 /// bitmask. We only ever call `webkit_hit_test_result_get_context`
@@ -429,4 +455,44 @@ unsafe extern "C" {
     pub fn g_memory_input_stream_new_from_bytes(
         bytes: *mut glib::ffi::GBytes,
     ) -> *mut GInputStream;
+
+    // --- Download lifecycle (4c.5.f) ---
+    // Programmatic download kickoff. Signature verified against
+    // /usr/include/wpe-webkit-2.0/wpe/WebKitWebView.h.
+    // Transfer-none: WebKit owns the returned WebKitDownload (it's
+    // tracked by the network session). The pointer is valid until the
+    // download finishes / fails; signal closures we connect on it keep
+    // their handler refs through the Download's GObject ref counted by
+    // WebKit itself, mirroring the GTK precedent.
+    pub fn webkit_web_view_download_uri(
+        view: *mut WebKitWebView,
+        uri: *const c_char,
+    ) -> *mut WebKitDownload;
+
+    // Per-Download accessors. All transfer-none — the strings live as
+    // long as the Download's request / response. Signatures verified
+    // against /usr/include/wpe-webkit-2.0/wpe/WebKitDownload.h,
+    // .../WebKitURIRequest.h, .../WebKitURIResponse.h.
+    pub fn webkit_download_get_request(download: *mut WebKitDownload) -> *mut WebKitURIRequest;
+    pub fn webkit_download_get_response(download: *mut WebKitDownload) -> *mut WebKitURIResponse;
+    pub fn webkit_download_get_destination(download: *mut WebKitDownload) -> *const c_char;
+    /// Set the destination the download will write to.
+    ///
+    /// **WPE 2.52.3 (ENABLE_2022_GLIB_API ON) deviation from GTK**: this
+    /// API requires an **absolute filesystem path**; passing a
+    /// `file://` URI (the GTK precedent's form) trips
+    /// `g_return_if_fail(g_path_is_absolute(destination))`. Verified
+    /// against `Source/WebKit/UIProcess/API/glib/WebKitDownload.cpp`
+    /// in the wpewebkit-2.52.3 source — under `ENABLE(2022_GLIB_API)`
+    /// the function rejects anything that isn't an absolute path.
+    pub fn webkit_download_set_destination(
+        download: *mut WebKitDownload,
+        destination: *const c_char,
+    );
+
+    pub fn webkit_uri_request_get_uri(request: *mut WebKitURIRequest) -> *const c_char;
+    pub fn webkit_uri_response_get_suggested_filename(
+        response: *mut WebKitURIResponse,
+    ) -> *const c_char;
+    pub fn webkit_uri_response_get_content_length(response: *mut WebKitURIResponse) -> u64;
 }

@@ -73,6 +73,17 @@ pub struct WpeProducer {
     #[cfg(feature = "wpe")]
     pub(super) cursor_shape:
         std::rc::Rc<std::cell::RefCell<Option<crate::CursorShape>>>,
+    /// Monotonic `DownloadId` allocator shared with the
+    /// `download-started` closure (which holds no `&mut self`). Each
+    /// new download pre-increments and stamps the resulting value.
+    /// Kept on the producer so a future inherent helper that needs to
+    /// peek at "next id" can do so without going through the closure.
+    /// Currently read only via the cloned `Rc` captured in the
+    /// download-started closure; the field itself is held for the
+    /// producer's lifetime as the canonical owner of that allocator.
+    #[cfg(feature = "wpe")]
+    #[allow(dead_code)]
+    pub(super) next_download_id: std::rc::Rc<std::cell::Cell<u64>>,
 }
 
 /// The single-slot frame channel a producer's render callback writes into.
@@ -162,6 +173,47 @@ impl WpeProducer {
             std::cell::RefCell<Option<crate::CursorShape>>,
         > = std::rc::Rc::new(std::cell::RefCell::new(None));
         super::cursor::install(&webview, &cursor_shape);
+
+        // Download lifecycle bridge (4c.5.f). Under WPE 2.0's
+        // ENABLE_2022_GLIB_API the `download-started` signal lives on
+        // the WebView's NetworkSession, not the WebContext — see
+        // downloads.rs module doc deviation #1. Fetch the
+        // (transfer-none) NetworkSession ptr off the webview, wrap it
+        // as a glib::Object just long enough to call connect_closure
+        // through the install helper.
+        let next_download_id =
+            std::rc::Rc::new(std::cell::Cell::new(0u64));
+        {
+            use glib::translate::ToGlibPtr;
+            let raw_view: *mut super::ffi::WebKitWebView =
+                ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&webview).0 as *mut _;
+            // SAFETY: raw_view is borrowed from the owned webview;
+            // get_network_session is transfer-none (the session is
+            // owned by the webview).
+            let raw_session = unsafe { super::ffi::webkit_web_view_get_network_session(raw_view) };
+            if !raw_session.is_null() {
+                // SAFETY: raw_session is a borrowed (transfer-none)
+                // GObject ptr owned by the webview. from_glib_none
+                // adds a ref the wrapper releases on drop — the
+                // session itself stays alive via the webview for the
+                // producer's lifetime, and the connect_closure inside
+                // `install` registers handlers on the underlying
+                // GObject (not on the wrapper).
+                let session_obj: glib::Object = unsafe {
+                    glib::translate::from_glib_none(
+                        raw_session as *mut glib::gobject_ffi::GObject,
+                    )
+                };
+                let downloads_dir = config.data_dir.join("downloads");
+                super::downloads::install(
+                    &session_obj,
+                    downloads_dir,
+                    nav_state.clone(),
+                    next_download_id.clone(),
+                );
+            }
+        }
+
         let producer = Self {
             capabilities: super::linux_wpe_capabilities(),
             size: config.size,
@@ -172,6 +224,7 @@ impl WpeProducer {
             nav_state,
             web_messages,
             cursor_shape,
+            next_download_id,
         };
         // Wire the WPEView frame seam now that the producer (and thus its
         // shared FrameSink) exists. The closure captures a FrameSink clone and

@@ -17,6 +17,8 @@ mod cookies;
 #[cfg(feature = "wpe")]
 mod cursor;
 #[cfg(feature = "wpe")]
+mod downloads;
+#[cfg(feature = "wpe")]
 mod ffi;
 #[cfg(feature = "wpe")]
 mod headless;

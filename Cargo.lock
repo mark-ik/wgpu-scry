@@ -647,6 +647,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "demo-wpe"
+version = "0.1.0"
+dependencies = [
+ "dpi",
+ "glib 0.18.5",
+ "libc",
+ "scrying",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
