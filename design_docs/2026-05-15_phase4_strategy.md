@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 + A.5 + A.6 shipped; 4c.5.f, 4c.6 in flight; A.7–A.9 queued.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 + A.5 + A.6 + A.7 shipped; 4c.5.f, 4c.6 in flight; A.8–A.9 queued.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -624,7 +624,7 @@ A.1 (script-message bridge — same shared UCM).
 | **A.4 — Cursor reporting** | `cursor.rs` — `mouse-target-changed` + `WebKitHitTestResult` precedence mapping + `poll_cursor_shape` | — |
 | **A.5 — IME observability** | `ime.rs` — second `scryIme` UCM handler + DOM focus/input watcher → `NavigationEvent::TextInput*` | A.1 |
 | **A.6 — Downloads** | `downloads.rs` — `NetworkSession::download-started` + per-download signal wiring (webkit6 moved the signal off `WebContext`) | — |
-| **A.7 — Input forwarding** | `input.rs` — keyboard + mouse + scroll. GTK 4 removed the synthetic-event path the GTK 3 producer's `input_native.rs` used; the webkit6 path is JS dispatch or `gtk4::GestureClick` synthesis. Approach TBD; spec deferred until A.1–A.6 land. | — |
+| **A.7 — Input forwarding** | `input.rs` — keyboard + mouse + pointer + drag via JS-event synthesis through `evaluate_javascript`. `gtk_main_do_event` was removed in GTK 4, so the GTK 3 producer's `input_native.rs` (real `GdkEvent` dispatch, which closes the `isTrusted` gap) has no analog here — webkit6 ships JS-synthesis only, with the macOS-equivalent `event.isTrusted === false` caveat. | — |
 | **A.8 — Settings application** | `WebSurfaceSettings` → `webkit6::Settings` mapping (parallel to GTK 3 producer's `apply_settings`) | — |
 | **A.9 — Devtools / inspector** | `open_devtools_window` — `WebInspector` API on webkit6 mirrors webkit2gtk closely | A.8 |
 
@@ -710,6 +710,33 @@ A.1 (script-message bridge — same shared UCM).
       `<config.data_dir>/downloads/`. Inherent
       `WebKit6Producer::download_url` ports the GTK 3 precedent
       directly (`webview.download_uri(url)`).
-- [ ] **A.7** Input forwarding — keyboard + mouse + scroll on GTK 4.
+- [x] **A.7** Input forwarding — `input.rs` ported from the GTK 3
+      precedent. JS-event-synthesis only: `mouse_event_js` /
+      `pointer_event_js` / `keyboard_event_js` / `drag_event_js`
+      builders carried over verbatim, plus `escape_for_js` reused
+      from A.1 to keep user-supplied strings from breaking out of JS
+      literals. `trait_impl` overrides `send_mouse_input` /
+      `send_pointer_input` / `send_keyboard_input` / `send_drag_input`
+      via a new `WebKit6Producer::run_input_js` fire-and-forget
+      helper (same call shape A.1's `post_web_message` uses —
+      `evaluate_javascript` with `Cancellable::NONE`). 8
+      pure-string unit tests pin the synthesized JS shape (mouse-down
+      dispatch, wheel deltas, ModifiersChanged no-op, keydown
+      modifier propagation, JS-quote escaping, touch pointer-down,
+      drag drop, buttons-mask bits). **Deliberate non-port:** the
+      GTK 3 producer's `input_native.rs` (real `GdkEvent` dispatch
+      via `gtk_main_do_event`, which closes the `isTrusted` gap) has
+      no GTK 4 equivalent — `gtk_main_do_event` was removed in the
+      GTK 4 migration. The webkit6 path therefore ships JS-synthesis
+      only, with the same `event.isTrusted === false` caveat the
+      macOS WKWebView producer documents: page code that
+      discriminates on `isTrusted` (some click-fraud defences,
+      `requestFullscreen()`, autoplay-gating user gestures) will
+      reject these events; native click side-effects the engine
+      triggers from real user gestures (form submission via Enter,
+      native context menus, focus stealing) do not fire. A future
+      native upgrade would route through `gtk4::GestureClick`
+      controller synthesis or direct `GdkSurface` event-queue
+      manipulation, both materially harder than `gtk_main_do_event`.
 - [ ] **A.8** Settings application — `WebSurfaceSettings` → webkit6.
 - [ ] **A.9** Devtools / inspector window.
