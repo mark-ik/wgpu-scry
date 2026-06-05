@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d shipped; 4c.5.e-f, 4c.6+ in flight.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e shipped; 4c.5.f, 4c.6+ in flight.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -540,9 +540,17 @@ artifact.
         extraction worked cleanly with no `g_value_get_object`
         fallback, and `WebKitHitTestResult` is present in WPE 2.52.3
         exactly as expected.
-  - [ ] **4c.5.e** IME observability — install `scryIme` handler +
+  - [x] **4c.5.e** IME observability — install `scryIme` handler +
         DOM focusin/focusout/input watcher script + `TextInput*`
-        nav events. Depends on `4c.5.a`'s bridge.
+        nav events. Depends on `4c.5.a`'s bridge. Direct port of
+        `webkitgtk_producer/ime.rs`: second handler on the same UCM,
+        same `RustClosure::new_local` + `jsc_value_to_string` +
+        `g_free` extraction pattern as `script_message::install`, with
+        the pipe-delimited payload parser feeding
+        `NavigationEvent::TextInputFocused`/`Changed`/`Blurred` onto
+        the producer's `NavState.events` queue (drained by
+        `poll_navigation_event`). 5 `parse_event` unit tests cover
+        blur, focus, change, password, malformed.
   - [ ] **4c.5.f** Downloads — port `downloads.rs`.
 - [ ] **4c.6** `demo-wpe` runtime probe — mirrors demo-linux
 - [ ] **4c.7** `docs/wpe-deployment.md` — Flatpak SDK manifest
