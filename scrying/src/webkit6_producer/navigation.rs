@@ -117,4 +117,34 @@ impl WebKit6Producer {
     pub fn committed_uri(&self) -> Option<String> {
         self.nav_state.borrow().committed_uri.clone()
     }
+
+    /// Pump the GTK 4 main loop until a [`NavigationEvent`] matching
+    /// `predicate` arrives or `timeout` elapses. Drains non-matching
+    /// events along the way (they're dropped), so callers should
+    /// register interest before driving whatever action would
+    /// trigger the wait.
+    ///
+    /// Mirrors `WebKitGtkProducer::wait_for_navigation_event` — same
+    /// shape as the GTK 3 precedent, retargeted to GTK 4's
+    /// `glib::MainContext::iteration(false)` pump.
+    pub fn wait_for_navigation_event<F: Fn(&NavigationEvent) -> bool>(
+        &self,
+        timeout: Duration,
+        predicate: F,
+    ) -> Option<NavigationEvent> {
+        let ctx = webkit6::glib::MainContext::default();
+        let deadline = Instant::now() + timeout;
+        loop {
+            while let Some(event) = self.nav_state.borrow_mut().events.pop_front() {
+                if predicate(&event) {
+                    return Some(event);
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            ctx.iteration(false);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
