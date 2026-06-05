@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 shipped; 4c.5.f, 4c.6 in flight; A.4–A.9 queued.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 + A.3 + A.4 shipped; 4c.5.f, 4c.6 in flight; A.5–A.9 queued.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -661,7 +661,19 @@ A.1 (script-message bridge — same shared UCM).
       `new` delegates with an empty map. Schemes are registered on the
       `WebContext` BEFORE `WebView::builder()` runs so the very first
       navigation can already resolve `myapp://...` URIs.
-- [ ] **A.4** Cursor — port `webkitgtk_producer/cursor.rs`.
+- [x] **A.4** Cursor — `cursor.rs` ported from the GTK 3 precedent.
+      WebKit's `mouse-target-changed` signal + `HitTestResult` context
+      bitmask are stable across GTK 3 / GTK 4 / WPE backends, so the
+      precedence mapping (editable > link > scrollbar > selection >
+      image/media > document) and the de-dup-on-raw-bitmask pattern
+      transferred verbatim. Cleaner than the WPE port — webkit6's
+      auto-generated `connect_mouse_target_changed` accepts a plain
+      `Fn(&WebView, &HitTestResult, u32)` closure (no hand-rolled
+      `RustClosure`/`closure_local!` plumbing the WPE side needs for
+      its hand-bound `HitTestResult`). `HitTestResult::context()` is
+      an inherent method on the auto-binding. `wait_for_cursor_shape`
+      pumps via `glib::MainContext::default().iteration(false)`,
+      matching the A.1 `wait_for_web_message` pattern.
 - [ ] **A.5** IME observability — port `webkitgtk_producer/ime.rs`
       (depends on A.1).
 - [ ] **A.6** Downloads — port `webkitgtk_producer/downloads.rs`
