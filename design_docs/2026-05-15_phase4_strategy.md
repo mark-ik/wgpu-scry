@@ -1,7 +1,7 @@
 # Phase 4 strategy — Vulkan DMABUF import + WPE producer
 
 **Date:** 2026-05-15
-**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 shipped; 4c.5.f, 4c.6 in flight; A.2–A.9 queued.
+**Status:** 4a + 4a.x + 4b.1 + 4c.1 + 4c.2 + 4c.3 + 4c.4 + 4c.4.1-3 + (β) + 4c.5.a + 4c.5.b + 4c.5.c + 4c.5.d + 4c.5.e + 4c.7 + 4c.8 + A.1 + A.2 shipped; 4c.5.f, 4c.6 in flight; A.3–A.9 queued.
 
 This doc captures the plan for the Linux producer's only remaining
 structural row in the [parity matrix](2026-05-07_platform_ceilings.md#cross-platform-parity-matrix):
@@ -642,7 +642,14 @@ A.1 (script-message bridge — same shared UCM).
       builds an explicit `UserContentManager` and passes it via
       `WebView::builder().user_content_manager(...)` so handler
       registration + shim injection have a stable handle.
-- [ ] **A.2** Cookies — port `webkitgtk_producer/cookies.rs`.
+- [x] **A.2** Cookies — `cookies.rs` ported from the GTK 3 precedent.
+      Routes through `NetworkSession::cookie_manager()` (webkit6 moved
+      the cookie manager off `WebsiteDataManager`). soup3 0.9's
+      `Cookie` API is shape-compatible with 0.5 — same `set_secure` /
+      `set_http_only` / `is_secure` / `is_http_only` / `expires` /
+      `Cookie::new(name, value, domain, path, max_age)`. webkit6's
+      `CookieManager::add_cookie` / `delete_cookie` take `&soup::Cookie`
+      (immutable) rather than `&mut`, simplifying the call site.
 - [ ] **A.3** Scheme handlers — port `webkitgtk_producer/scheme_handler.rs`.
 - [ ] **A.4** Cursor — port `webkitgtk_producer/cursor.rs`.
 - [ ] **A.5** IME observability — port `webkitgtk_producer/ime.rs`
