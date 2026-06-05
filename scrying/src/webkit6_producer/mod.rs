@@ -32,6 +32,7 @@ mod config;
 mod helpers;
 mod navigation;
 mod producer;
+mod script_message;
 mod trait_impl;
 
 use crate::native_frame::{CapabilityStatus, UnsupportedReason};

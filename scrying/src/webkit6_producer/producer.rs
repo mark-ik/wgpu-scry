@@ -1,18 +1,20 @@
 //! [`WebKit6Producer`] struct, construction, Drop.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use dpi::PhysicalSize;
 use webkit6::gtk;
 use webkit6::gtk::prelude::*;
-use webkit6::{NetworkSession, WebContext, WebView};
+use webkit6::{NetworkSession, UserContentManager, WebContext, WebView};
 
 use crate::{WebSurfaceCapabilities, WebSurfaceError};
 
 use super::config::WebKit6ProducerConfig;
 use super::helpers::ensure_gtk_init;
 use super::navigation::{NavState, install_load_signals};
+use super::script_message;
 
 /// Linux WebKitGTK 6.0 producer. Hosts a `WebKitWebView` inside a
 /// hidden top-level `gtk4::Window` and emits CPU RGBA snapshots via
@@ -30,6 +32,12 @@ pub struct WebKit6Producer {
     pub(crate) offset: (f32, f32),
     pub(crate) generation: Cell<u64>,
     pub(crate) nav_state: Rc<RefCell<NavState>>,
+    /// FIFO of incoming `window.webkit.messageHandlers.scry.postMessage`
+    /// payloads from page JS. Drained by
+    /// [`crate::WebSurfaceProducer::poll_web_message`] or pumped via
+    /// [`Self::wait_for_web_message`]. Installed by
+    /// [`super::script_message::install`] in [`Self::new`].
+    pub(crate) web_messages: Rc<RefCell<VecDeque<String>>>,
 }
 
 impl WebKit6Producer {
@@ -61,9 +69,15 @@ impl WebKit6Producer {
         let data_dir_str = config.data_dir.to_string_lossy().to_string();
         let network_session = NetworkSession::new(Some(&data_dir_str), Some(&data_dir_str));
         let context = WebContext::new();
+        // Build an explicit `UserContentManager` so the JS-messaging
+        // bridge has a stable handle to register handlers + inject
+        // user scripts against. `WebView::builder().user_content_manager(...)`
+        // wires it via the GObject construct property.
+        let ucm = UserContentManager::new();
         let webview = WebView::builder()
             .web_context(&context)
             .network_session(&network_session)
+            .user_content_manager(&ucm)
             .build();
 
         // GTK 4 dropped `GtkOffscreenWindow`, and WebKitGTK 6.0
@@ -91,6 +105,10 @@ impl WebKit6Producer {
         let nav_state = Rc::new(RefCell::new(NavState::default()));
         install_load_signals(&webview, &nav_state);
 
+        let web_messages: Rc<RefCell<VecDeque<String>>> =
+            Rc::new(RefCell::new(VecDeque::new()));
+        script_message::install(&ucm, &web_messages);
+
         Ok(Self {
             capabilities: super::linux_webkit6_capabilities(),
             webview,
@@ -101,6 +119,7 @@ impl WebKit6Producer {
             offset: config.offset,
             generation: Cell::new(0),
             nav_state,
+            web_messages,
         })
     }
 

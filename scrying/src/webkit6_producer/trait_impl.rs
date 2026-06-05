@@ -13,6 +13,7 @@ use crate::{
 
 use super::navigation::{arm_navigation, wait_for_load};
 use super::producer::WebKit6Producer;
+use super::script_message;
 
 impl WebSurfaceProducer for WebKit6Producer {
     fn capabilities(&self) -> WebSurfaceCapabilities {
@@ -65,5 +66,31 @@ impl WebSurfaceProducer for WebKit6Producer {
 
     fn poll_navigation_event(&mut self) -> Option<NavigationEvent> {
         self.nav_state.borrow_mut().events.pop_front()
+    }
+
+    fn post_web_message(&mut self, message: &str) -> Result<(), WebSurfaceError> {
+        let js = format!(
+            "if (window.chrome && window.chrome.webview && window.chrome.webview.__scryDispatch) {{ \
+                 window.chrome.webview.__scryDispatch({}); \
+             }}",
+            script_message::escape_for_js(message)
+        );
+        // `evaluate_javascript` (WebKitGTK 2.40+; gated behind webkit6's
+        // `v2_44` feature, which we have enabled). Default world, no
+        // source-URI tagging — this is host-driven dispatch, not page
+        // code. Cancellable=NONE / fire-and-forget callback mirrors the
+        // GTK 3 precedent: pages without listeners are not an error.
+        self.webview.evaluate_javascript(
+            &js,
+            None,
+            None,
+            webkit6::gio::Cancellable::NONE,
+            |_| {},
+        );
+        Ok(())
+    }
+
+    fn poll_web_message(&mut self) -> Option<String> {
+        self.web_messages.borrow_mut().pop_front()
     }
 }
