@@ -19,8 +19,10 @@
 //! `tests/` integration target (each `tests/*.rs` is its own binary, so its
 //! WebKit state is independent of this one).
 
+use std::collections::HashMap;
+
 use super::ffi;
-use crate::WebSurfaceError;
+use crate::{UrlSchemeHandlerFn, WebSurfaceError};
 use crate::native_frame::{DmaBufImage, DmaBufPlane, SyncMechanism};
 use glib::prelude::*;
 use glib::translate::{IntoGlib, from_glib, from_glib_full};
@@ -60,12 +62,20 @@ pub(super) fn pump_until(
 /// pointer borrowed from that webview. The `WPEView` pointer is valid for the
 /// lifetime of the returned `glib::Object`.
 ///
-/// The transfer-full display and network-session construction refs are released
-/// inside this function after `g_object_new` takes its own references on each
-/// construct-property object. The `WebView` retains its own refs, keeping both
-/// alive for its lifetime.
-pub(super) fn build_producer_view()
-    -> Result<(glib::Object, *mut ffi::WPEView, *mut ffi::WPEToplevel), WebSurfaceError>
+/// The transfer-full display, network-session, and web-context construction
+/// refs are released inside this function after `g_object_new` takes its own
+/// references on each construct-property object. The `WebView` retains its
+/// own refs, keeping all three alive for its lifetime.
+///
+/// `url_schemes` are registered against the producer's `WebContext` BEFORE the
+/// WebView is built so the very first navigation can already resolve
+/// custom-scheme URIs. The handler boxes are reclaimed by the
+/// `GDestroyNotify` we pass to `webkit_web_context_register_uri_scheme` when
+/// the WebContext is finalized (i.e. when the WebView drops its ref on it,
+/// which happens when the producer drops).
+pub(super) fn build_producer_view(
+    url_schemes: HashMap<String, UrlSchemeHandlerFn>,
+) -> Result<(glib::Object, *mut ffi::WPEView, *mut ffi::WPEToplevel), WebSurfaceError>
 {
     // 1. Self-owned headless display (no compositor surface).
     let display = unsafe { ffi::wpe_display_headless_new() };
@@ -79,12 +89,38 @@ pub(super) fn build_producer_view()
     //    default WebsiteDataStore (whose destructor asserts during atexit teardown).
     let network_session = unsafe { ffi::webkit_network_session_new_ephemeral() };
 
+    // 2b. Explicit WebContext so we can register custom URL scheme handlers
+    //     BEFORE the WebView is built. Without an explicit context here the
+    //     WebView would auto-create a default one — and scheme handlers must
+    //     be registered before first navigation, so registering on the
+    //     auto-created context after the fact is racy with whatever the
+    //     WebView loads at startup. `webkit_web_context_new` is
+    //     transfer-full; we hold the ref through the `g_object_new` call
+    //     below (which makes the WebView take its own) and release ours
+    //     afterwards, mirroring the display/network-session dance.
+    let context = unsafe { ffi::webkit_web_context_new() };
+    if context.is_null() {
+        unsafe {
+            glib::gobject_ffi::g_object_unref(display as *mut glib::gobject_ffi::GObject);
+            glib::gobject_ffi::g_object_unref(network_session as *mut glib::gobject_ffi::GObject);
+        }
+        return Err(WebSurfaceError::Platform(
+            "webkit_web_context_new() returned null".into(),
+        ));
+    }
+    // Register host-supplied scheme handlers on the fresh context before
+    // we hand it to the WebView. Empty map is a no-op.
+    if !url_schemes.is_empty() {
+        super::scheme_handler::register_all(context, url_schemes);
+    }
+
     // 3. Fetch the WebKitWebView GType at runtime (most version-robust path).
     let webview_gtype: glib::Type = unsafe { from_glib(ffi::webkit_web_view_get_type()) };
 
-    // 4. Construct the WebView with its `display` and `network-session` construct
-    //    properties. Variadic g_object_new sidesteps building a GValue array by
-    //    hand and lets the property setter transform-check the display pointer.
+    // 4. Construct the WebView with its `display`, `network-session`, and
+    //    `web-context` construct properties. Variadic g_object_new sidesteps
+    //    building a GValue array by hand and lets the property setter
+    //    transform-check the display pointer.
     let raw_obj = unsafe {
         glib::gobject_ffi::g_object_new(
             webview_gtype.into_glib(),
@@ -92,16 +128,20 @@ pub(super) fn build_producer_view()
             display,
             c"network-session".as_ptr(),
             network_session,
+            c"web-context".as_ptr(),
+            context,
             std::ptr::null::<c_char>(),
         )
     };
     if raw_obj.is_null() {
-        // SAFETY: display and network_session are valid transfer-full GObject
-        // pointers from the *_new constructors above; g_object_new did not adopt
-        // them into a returned object, so release our refs before bailing.
+        // SAFETY: display, network_session, and context are valid transfer-full
+        // GObject pointers from the *_new constructors above; g_object_new did
+        // not adopt them into a returned object, so release our refs before
+        // bailing.
         unsafe {
             glib::gobject_ffi::g_object_unref(display as *mut glib::gobject_ffi::GObject);
             glib::gobject_ffi::g_object_unref(network_session as *mut glib::gobject_ffi::GObject);
+            glib::gobject_ffi::g_object_unref(context as *mut glib::gobject_ffi::GObject);
         }
         return Err(WebSurfaceError::Platform(
             "g_object_new returned null for WebKitWebView".into(),
@@ -113,16 +153,17 @@ pub(super) fn build_producer_view()
 
     // 6. Release the transfer-full refs we received from the *_new constructors.
     //    g_object_new took its own ref on each construct-property object, so the
-    //    WebView retains both display and network_session for its lifetime. We
-    //    must release our transfer-full refs or they leak.
+    //    WebView retains display, network_session, AND context for its lifetime.
+    //    We must release our transfer-full refs or they leak.
     //    NOTE: capture `display` for the binding check (step 7) BEFORE unreffing;
     //    the pointer remains valid to compare because the WebView holds a ref.
     unsafe {
-        // SAFETY: display and network_session are valid GObject pointers obtained
-        // from transfer-full constructors above. The WebView has incremented their
+        // SAFETY: all three are valid GObject pointers obtained from
+        // transfer-full constructors above. The WebView has incremented their
         // refcounts via g_object_new, so unreffing here is safe and correct.
         glib::gobject_ffi::g_object_unref(display as *mut glib::gobject_ffi::GObject);
         glib::gobject_ffi::g_object_unref(network_session as *mut glib::gobject_ffi::GObject);
+        glib::gobject_ffi::g_object_unref(context as *mut glib::gobject_ffi::GObject);
     }
 
     // 7. Get the raw WebKitWebView pointer (borrowed from the owned `webview`).

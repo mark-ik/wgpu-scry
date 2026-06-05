@@ -118,6 +118,18 @@ pub(super) fn close_frame_fds(frame: &DmaBufImage) {
 impl WpeProducer {
     #[cfg(feature = "wpe")]
     pub fn new(config: WpeProducerConfig) -> Result<Self, crate::WebSurfaceError> {
+        Self::new_with_url_schemes(config, std::collections::HashMap::new())
+    }
+
+    /// Construct the producer with custom URL scheme handlers registered
+    /// against a fresh `WebKitWebContext` BEFORE the `WebView` is built —
+    /// so the very first navigation can already resolve `myapp://...`
+    /// URIs. Mirrors `WebKitGtkProducer::new_with_url_schemes`.
+    #[cfg(feature = "wpe")]
+    pub fn new_with_url_schemes(
+        config: WpeProducerConfig,
+        url_schemes: std::collections::HashMap<String, crate::UrlSchemeHandlerFn>,
+    ) -> Result<Self, crate::WebSurfaceError> {
         use crate::WebSurfaceError;
         if config.size.width == 0 || config.size.height == 0 {
             return Err(WebSurfaceError::Platform(format!(
@@ -126,7 +138,7 @@ impl WpeProducer {
             )));
         }
         let main_context = glib::MainContext::default();
-        let (webview, view, toplevel) = super::headless::build_producer_view()?;
+        let (webview, view, toplevel) = super::headless::build_producer_view(url_schemes)?;
         let nav_state = std::rc::Rc::new(std::cell::RefCell::new(
             super::navigation::NavState::default(),
         ));
