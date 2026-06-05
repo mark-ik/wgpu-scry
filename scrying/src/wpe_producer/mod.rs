@@ -13,6 +13,8 @@ mod config;
 mod producer;
 
 #[cfg(feature = "wpe")]
+mod cookies;
+#[cfg(feature = "wpe")]
 mod ffi;
 #[cfg(feature = "wpe")]
 mod headless;
