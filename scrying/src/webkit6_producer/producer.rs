@@ -14,6 +14,7 @@ use crate::{CursorShape, UrlSchemeHandlerFn, WebSurfaceCapabilities, WebSurfaceE
 use super::config::WebKit6ProducerConfig;
 use super::cursor;
 use super::helpers::ensure_gtk_init;
+use super::ime;
 use super::navigation::{NavState, install_load_signals};
 use super::scheme_handler;
 use super::script_message;
@@ -136,6 +137,7 @@ impl WebKit6Producer {
         let web_messages: Rc<RefCell<VecDeque<String>>> =
             Rc::new(RefCell::new(VecDeque::new()));
         script_message::install(&ucm, &web_messages);
+        ime::install(&ucm, &nav_state);
 
         let cursor_shape: Rc<RefCell<Option<CursorShape>>> = Rc::new(RefCell::new(None));
         cursor::install(&webview, &cursor_shape);

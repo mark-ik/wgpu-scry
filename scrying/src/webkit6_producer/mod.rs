@@ -32,6 +32,7 @@ mod config;
 mod cookies;
 mod cursor;
 mod helpers;
+mod ime;
 mod navigation;
 mod producer;
 mod scheme_handler;
