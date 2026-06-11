@@ -368,6 +368,15 @@ fn create_environment(user_data_dir: &Path) -> Result<ICoreWebView2Environment, 
         Box::new(move |handler| {
             let user_data_dir = CoTaskMemPWSTR::from(user_data_dir.as_str());
             let options = CoreWebView2EnvironmentOptions::default();
+            // Auto-hiding Windows-style overlay scrollbars: an embedded compat tile
+            // should not show a persistent scrollbar gutter that reserves layout width
+            // (the page is composited into a card, not a full window).
+            unsafe {
+                options.set_additional_browser_arguments(
+                    "--enable-features=msOverlayScrollbarWinStyle,msOverlayScrollbarWinStyleAnimation"
+                        .to_string(),
+                );
+            }
             unsafe {
                 webview2_com::Microsoft::Web::WebView2::Win32::CreateCoreWebView2EnvironmentWithOptions(
                     PCWSTR::null(),
