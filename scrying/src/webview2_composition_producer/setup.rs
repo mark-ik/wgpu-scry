@@ -31,6 +31,11 @@ impl CompositionRoot {
             ));
         }
         let parent_hwnd = HWND(parent_hwnd);
+        // `Windows.UI.Composition.Compositor` requires a `DispatcherQueue` on the
+        // calling thread. A consumer's own message-loop thread may not have one
+        // (winit, for instance, does not create it), so ensure it here before
+        // `Compositor::new` rather than making every consumer set it up.
+        ensure_dispatcher_queue()?;
         let compositor = Compositor::new().map_err(platform("Compositor::new"))?;
         let desktop_interop: ICompositorDesktopInterop = compositor
             .cast()
@@ -51,6 +56,46 @@ impl CompositionRoot {
             root_visual,
         }))
     }
+}
+
+/// Ensure a `DispatcherQueue` exists on the current (UI) thread, which
+/// `Windows.UI.Composition.Compositor` requires before it can be created.
+/// Idempotent: a queue the consumer already created (or one made by an earlier
+/// call here) is honored; otherwise a `DispatcherQueueController` is created for
+/// the current thread and retained thread-locally for the thread's lifetime
+/// (dropping the controller would tear the queue down).
+fn ensure_dispatcher_queue() -> Result<(), WebSurfaceError> {
+    use std::cell::RefCell;
+
+    use windows::System::{DispatcherQueue, DispatcherQueueController};
+    use windows::Win32::System::WinRT::{
+        CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+        DispatcherQueueOptions,
+    };
+
+    thread_local! {
+        static CONTROLLER: RefCell<Option<DispatcherQueueController>> =
+            const { RefCell::new(None) };
+    }
+
+    // We already created one on this thread.
+    if CONTROLLER.with(|c| c.borrow().is_some()) {
+        return Ok(());
+    }
+    // The consumer may have created its own (e.g. the demo keeps one); honor it.
+    if DispatcherQueue::GetForCurrentThread().is_ok() {
+        return Ok(());
+    }
+    let controller = unsafe {
+        CreateDispatcherQueueController(DispatcherQueueOptions {
+            dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
+            threadType: DQTYPE_THREAD_CURRENT,
+            apartmentType: DQTAT_COM_STA,
+        })
+    }
+    .map_err(platform("CreateDispatcherQueueController"))?;
+    CONTROLLER.with(|c| *c.borrow_mut() = Some(controller));
+    Ok(())
 }
 
 impl WebView2CompositionProducer {
