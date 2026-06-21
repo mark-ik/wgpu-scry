@@ -108,7 +108,7 @@ pollster = "0.4"
 # signal fires on that context). `glib` is already a transitive dependency
 # via the `wpe` feature; listing it here makes it directly available to the
 # integration test binary without touching the library's own dependency list.
-glib = { version = "0.18", optional = false }
+glib = "0.18"
 
 [build-dependencies]
 pkg-config = "0.3"

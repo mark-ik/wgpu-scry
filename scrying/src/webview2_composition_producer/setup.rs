@@ -1,5 +1,11 @@
 use super::*;
 
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, SW_SHOWNOACTIVATE, ShowWindow, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_POPUP,
+};
+use windows::core::w;
+
 /// Shared per-HWND composition resources. Windows allows exactly one
 /// `DesktopWindowTarget` per HWND — a second `CreateDesktopWindowTarget` on the
 /// same HWND fails with `DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED`. To host
@@ -14,6 +20,12 @@ pub struct CompositionRoot {
     #[allow(dead_code)]
     desktop_target: windows::UI::Composition::Desktop::DesktopWindowTarget,
     pub(super) root_visual: ContainerVisual,
+    /// A private off-screen host window this root owns (capture-only hosting via
+    /// [`CompositionRoot::new_offscreen`]). `None` when bound to a consumer's
+    /// HWND. Declared last so it is dropped — and the window destroyed — only
+    /// after `desktop_target` releases its hold on the HWND.
+    #[allow(dead_code)]
+    owned_host: Option<OwnedHostWindow>,
 }
 
 impl CompositionRoot {
@@ -30,7 +42,43 @@ impl CompositionRoot {
                 "parent HWND was null".to_string(),
             ));
         }
-        let parent_hwnd = HWND(parent_hwnd);
+        // Safety: forwarded from this fn's `# Safety` contract.
+        unsafe { Self::build(HWND(parent_hwnd), None) }
+    }
+
+    /// Capture-only hosting: bind the composition tree to a private off-screen
+    /// host window this root creates and owns, instead of a consumer window. The
+    /// WebView visual is then never displayed — the consumer composites the
+    /// WGC-captured texture into its own scene — so it can never occlude the
+    /// consumer's own rendering. The host is a top-level tool window positioned
+    /// off every monitor and shown without activation, so DWM keeps compositing it
+    /// for capture (a minimized / `SW_HIDE` window would be throttled) while it
+    /// stays invisible and never steals focus.
+    ///
+    /// `size` only needs to anchor the host; capture is `CreateFromVisual` off
+    /// each pane's own visual at the visual's size, independent of the host window
+    /// size (proven by `--composition-focus-hwnd-test`, which captures 260x220
+    /// panes on a 1x1 host), so a modest size suffices.
+    pub fn new_offscreen(size: PhysicalSize<u32>) -> Result<Arc<Self>, WebSurfaceError> {
+        let host = OwnedHostWindow::new_offscreen(size)?;
+        let hwnd = host.hwnd;
+        // Safety: `hwnd` is a live top-level window owned by `host`, which is moved
+        // into the returned root and so outlives the target bound to it.
+        unsafe { Self::build(hwnd, Some(host)) }
+    }
+
+    /// Shared core of [`new`](Self::new) / [`new_offscreen`](Self::new_offscreen):
+    /// build the compositor, bind a `DesktopWindowTarget` to `parent_hwnd`, and
+    /// set the root visual.
+    ///
+    /// # Safety
+    ///
+    /// `parent_hwnd` must be a live top-level HWND for the lifetime of the
+    /// returned root (satisfied by the caller, or by `owned_host` owning it).
+    unsafe fn build(
+        parent_hwnd: HWND,
+        owned_host: Option<OwnedHostWindow>,
+    ) -> Result<Arc<Self>, WebSurfaceError> {
         // `Windows.UI.Composition.Compositor` requires a `DispatcherQueue` on the
         // calling thread. A consumer's own message-loop thread may not have one
         // (winit, for instance, does not create it), so ensure it here before
@@ -54,7 +102,59 @@ impl CompositionRoot {
             compositor,
             desktop_target,
             root_visual,
+            owned_host,
         }))
+    }
+}
+
+/// A top-level off-screen window owned by a capture-only [`CompositionRoot`].
+/// Destroyed on drop.
+struct OwnedHostWindow {
+    hwnd: HWND,
+}
+
+impl OwnedHostWindow {
+    fn new_offscreen(size: PhysicalSize<u32>) -> Result<Self, WebSurfaceError> {
+        let width = size.width.max(1) as i32;
+        let height = size.height.max(1) as i32;
+        // Built-in `STATIC` class (no class registration needed, matching the
+        // demo's HWND smokes). `WS_POPUP` top-level so it can carry its own
+        // `DesktopWindowTarget`; tool window + `NOACTIVATE` keep it out of the
+        // taskbar / alt-tab and stop it stealing focus; positioned far off every
+        // monitor so it is never visible.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                -32000,
+                -32000,
+                width,
+                height,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .map_err(platform("CreateWindowExW (offscreen host)"))?;
+        // Shown (not minimized / `SW_HIDE`) so DWM keeps compositing it for WGC;
+        // the off-screen position keeps it invisible, `SHOWNOACTIVATE` avoids any
+        // focus change.
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
+        Ok(Self { hwnd })
+    }
+}
+
+impl Drop for OwnedHostWindow {
+    fn drop(&mut self) {
+        // Safety: `hwnd` was created by `new_offscreen` and is destroyed only here.
+        unsafe {
+            let _ = DestroyWindow(self.hwnd);
+        }
     }
 }
 
