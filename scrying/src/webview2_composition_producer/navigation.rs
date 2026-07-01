@@ -286,6 +286,12 @@ impl WebView2CompositionProducer {
         unsafe { self.webview.Navigate(*url.as_ref().as_pcwstr()) }
             .map_err(platform("Navigate (load_url)"))
     }
+
+    pub fn load_html(&self, html: &str) -> Result<(), WebSurfaceError> {
+        let html = CoTaskMemPWSTR::from(html);
+        unsafe { self.webview.NavigateToString(*html.as_ref().as_pcwstr()) }
+            .map_err(platform("NavigateToString (load_html)"))
+    }
 }
 
 pub(super) fn register_persistent_handlers(

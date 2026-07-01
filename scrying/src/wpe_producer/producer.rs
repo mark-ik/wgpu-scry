@@ -4,9 +4,7 @@ use std::sync::{Arc, Mutex};
 use dpi::PhysicalSize;
 
 use crate::native_frame::{DmaBufImage, NativeFrame, SyncMechanism};
-use crate::{
-    WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame, WebSurfaceProducer,
-};
+use crate::{WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame, WebSurfaceProducer};
 
 use super::WpeProducerConfig;
 
@@ -36,7 +34,6 @@ pub(super) struct WpeHandles {
     pub main_context: glib::MainContext,
 }
 
-
 /// Linux WPE producer — constructs and owns a headless WPEPlatform display,
 /// a `WebKitWebView` bound to that display, and the associated `WPEView`.
 /// Frames arrive as DMABUF exports that scrying imports through wgpu's Vulkan
@@ -61,8 +58,7 @@ pub struct WpeProducer {
     /// `script_message::install`. Single-threaded RefCell — closure and
     /// drainers both run on the producer's main-context thread.
     #[cfg(feature = "wpe")]
-    pub(super) web_messages:
-        std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<String>>>,
+    pub(super) web_messages: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<String>>>,
     /// Latest [`crate::CursorShape`] reported by the WebView's
     /// `mouse-target-changed` signal, drained by `poll_cursor_shape`
     /// (trait) or `wait_for_cursor_shape` (inherent). Single-slot:
@@ -71,8 +67,7 @@ pub struct WpeProducer {
     /// changes. Single-threaded RefCell — closure and drainers both
     /// run on the producer's main-context thread.
     #[cfg(feature = "wpe")]
-    pub(super) cursor_shape:
-        std::rc::Rc<std::cell::RefCell<Option<crate::CursorShape>>>,
+    pub(super) cursor_shape: std::rc::Rc<std::cell::RefCell<Option<crate::CursorShape>>>,
     /// Monotonic `DownloadId` allocator shared with the
     /// `download-started` closure (which holds no `&mut self`). Each
     /// new download pre-increments and stamps the resulting value.
@@ -164,14 +159,12 @@ impl WpeProducer {
             super::navigation::NavState::default(),
         ));
         super::navigation::install_load_signals(&webview, &nav_state);
-        let web_messages = std::rc::Rc::new(std::cell::RefCell::new(
-            std::collections::VecDeque::new(),
-        ));
+        let web_messages =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
         super::script_message::install(&webview, web_messages.clone());
         super::ime::install(&webview, nav_state.clone());
-        let cursor_shape: std::rc::Rc<
-            std::cell::RefCell<Option<crate::CursorShape>>,
-        > = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let cursor_shape: std::rc::Rc<std::cell::RefCell<Option<crate::CursorShape>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
         super::cursor::install(&webview, &cursor_shape);
 
         // Download lifecycle bridge (4c.5.f). Under WPE 2.0's
@@ -181,8 +174,7 @@ impl WpeProducer {
         // (transfer-none) NetworkSession ptr off the webview, wrap it
         // as a glib::Object just long enough to call connect_closure
         // through the install helper.
-        let next_download_id =
-            std::rc::Rc::new(std::cell::Cell::new(0u64));
+        let next_download_id = std::rc::Rc::new(std::cell::Cell::new(0u64));
         {
             use glib::translate::ToGlibPtr;
             let raw_view: *mut super::ffi::WebKitWebView =
@@ -200,9 +192,7 @@ impl WpeProducer {
                 // `install` registers handlers on the underlying
                 // GObject (not on the wrapper).
                 let session_obj: glib::Object = unsafe {
-                    glib::translate::from_glib_none(
-                        raw_session as *mut glib::gobject_ffi::GObject,
-                    )
+                    glib::translate::from_glib_none(raw_session as *mut glib::gobject_ffi::GObject)
                 };
                 let downloads_dir = config.data_dir.join("downloads");
                 super::downloads::install(
@@ -220,7 +210,12 @@ impl WpeProducer {
             offset: config.offset,
             pending_frame: Arc::new(Mutex::new(None)),
             generation: Arc::new(AtomicU64::new(0)),
-            handles: WpeHandles { webview, view, toplevel, main_context },
+            handles: WpeHandles {
+                webview,
+                view,
+                toplevel,
+                main_context,
+            },
             nav_state,
             web_messages,
             cursor_shape,
@@ -334,8 +329,8 @@ impl WpeProducer {
         let raw: *mut super::ffi::WebKitWebView =
             ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.handles.webview).0
                 as *mut _;
-        let c_html = std::ffi::CString::new(html)
-            .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        let c_html =
+            std::ffi::CString::new(html).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
         let c_base = base_uri.and_then(|s| std::ffi::CString::new(s).ok());
         // SAFETY: `raw` is borrowed from the owned `webview`; load_html copies
         // both strings before returning.
@@ -343,7 +338,10 @@ impl WpeProducer {
             super::ffi::webkit_web_view_load_html(
                 raw,
                 c_html.as_ptr(),
-                c_base.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null()),
+                c_base
+                    .as_ref()
+                    .map(|c| c.as_ptr())
+                    .unwrap_or(std::ptr::null()),
             );
         }
     }
@@ -362,7 +360,9 @@ impl WpeProducer {
         let c_uri = std::ffi::CString::new(uri)
             .unwrap_or_else(|_| std::ffi::CString::new("about:blank").unwrap());
         // SAFETY: raw borrowed; load_uri copies the string before returning.
-        unsafe { super::ffi::webkit_web_view_load_uri(raw, c_uri.as_ptr()); }
+        unsafe {
+            super::ffi::webkit_web_view_load_uri(raw, c_uri.as_ptr());
+        }
     }
 
     /// Pump the producer's main context until the most recent navigation
@@ -381,10 +381,7 @@ impl WpeProducer {
     /// need to block briefly waiting for `window.chrome.webview.postMessage`
     /// to land — runtime smokes, scripted tests, request/response patterns.
     /// Non-blocking callers should use the `poll_web_message` trait method.
-    pub fn wait_for_web_message(
-        &self,
-        timeout: std::time::Duration,
-    ) -> Option<String> {
+    pub fn wait_for_web_message(&self, timeout: std::time::Duration) -> Option<String> {
         let ctx = &self.handles.main_context;
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -428,10 +425,43 @@ impl WebSurfaceProducer for WpeProducer {
     }
 
     fn acquire_frame(&mut self) -> Result<WebSurfaceFrame, WebSurfaceError> {
-        self.try_acquire_frame()?
-            .ok_or(WebSurfaceError::NotReady(
-                "no DMABUF frame queued yet; pump the producer's main context",
+        self.try_acquire_frame()?.ok_or(WebSurfaceError::NotReady(
+            "no DMABUF frame queued yet; pump the producer's main context",
+        ))
+    }
+
+    fn try_acquire_frame(&mut self) -> Result<Option<WebSurfaceFrame>, WebSurfaceError> {
+        WpeProducer::try_acquire_frame(self)
+    }
+
+    fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")]
+        {
+            WpeProducer::load_html(self, html, None);
+            Ok(())
+        }
+        #[cfg(not(feature = "wpe"))]
+        {
+            let _ = html;
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
             ))
+        }
+    }
+
+    fn load_url(&mut self, url: &str) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")]
+        {
+            WpeProducer::load_uri(self, url);
+            Ok(())
+        }
+        #[cfg(not(feature = "wpe"))]
+        {
+            let _ = url;
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
+        }
     }
 
     fn navigate_to_string(
@@ -439,12 +469,14 @@ impl WebSurfaceProducer for WpeProducer {
         html: &str,
         timeout: std::time::Duration,
     ) -> Result<(), WebSurfaceError> {
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             // `load_html` arms the nav state internally — no double-arm here.
             self.load_html(html, None);
             self.wait_for_load(timeout)
         }
-        #[cfg(not(feature = "wpe"))] {
+        #[cfg(not(feature = "wpe"))]
+        {
             let _ = (html, timeout);
             Err(WebSurfaceError::Unsupported(
                 "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
@@ -457,17 +489,23 @@ impl WebSurfaceProducer for WpeProducer {
         url: &str,
         timeout: std::time::Duration,
     ) -> Result<(), WebSurfaceError> {
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             // `load_uri` arms the nav state internally — no double-arm here.
             self.load_uri(url);
             self.wait_for_load(timeout)
         }
-        #[cfg(not(feature = "wpe"))] {
+        #[cfg(not(feature = "wpe"))]
+        {
             let _ = (url, timeout);
             Err(WebSurfaceError::Unsupported(
                 "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
             ))
         }
+    }
+
+    fn set_cookie(&mut self, cookie: &crate::Cookie) -> Result<(), WebSurfaceError> {
+        WpeProducer::set_cookie(self, cookie)
     }
 
     /// Resize the producer's render target.
@@ -500,7 +538,8 @@ impl WebSurfaceProducer for WpeProducer {
                 size.width, size.height
             )));
         }
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             // SAFETY: handles.toplevel + handles.view are non-null per the
             // construction guard in build_producer_view; transfer-none
             // borrows, valid for the producer's lifetime.
@@ -512,10 +551,10 @@ impl WebSurfaceProducer for WpeProducer {
                 )
             };
             if ok == 0 {
-                return Err(WebSurfaceError::Platform(
-                    format!("wpe_toplevel_resize returned FALSE for {}x{}",
-                            size.width, size.height),
-                ));
+                return Err(WebSurfaceError::Platform(format!(
+                    "wpe_toplevel_resize returned FALSE for {}x{}",
+                    size.width, size.height
+                )));
             }
             // The toplevel's `resize` vfunc on the headless backend is a
             // no-op — the View, not the Toplevel, is what WebKit reads
@@ -540,20 +579,28 @@ impl WebSurfaceProducer for WpeProducer {
     }
 
     fn poll_navigation_event(&mut self) -> Option<crate::NavigationEvent> {
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             self.nav_state.borrow_mut().events.pop_front()
         }
-        #[cfg(not(feature = "wpe"))] { None }
+        #[cfg(not(feature = "wpe"))]
+        {
+            None
+        }
     }
 
     fn send_keyboard_input(&mut self, event: crate::KeyboardInput) -> Result<(), WebSurfaceError> {
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             // SAFETY: handles.view is non-null per the construction guard;
             // dispatch_keyboard is single-threaded on the producer's thread.
-            unsafe { super::input::dispatch_keyboard(self.handles.view, &event); }
+            unsafe {
+                super::input::dispatch_keyboard(self.handles.view, &event);
+            }
             Ok(())
         }
-        #[cfg(not(feature = "wpe"))] {
+        #[cfg(not(feature = "wpe"))]
+        {
             let _ = event;
             Err(WebSurfaceError::Unsupported(
                 "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
@@ -562,11 +609,15 @@ impl WebSurfaceProducer for WpeProducer {
     }
 
     fn send_mouse_input(&mut self, event: crate::MouseInput) -> Result<(), WebSurfaceError> {
-        #[cfg(feature = "wpe")] {
-            unsafe { super::input::dispatch_mouse(self.handles.view, &event); }
+        #[cfg(feature = "wpe")]
+        {
+            unsafe {
+                super::input::dispatch_mouse(self.handles.view, &event);
+            }
             Ok(())
         }
-        #[cfg(not(feature = "wpe"))] {
+        #[cfg(not(feature = "wpe"))]
+        {
             let _ = event;
             Err(WebSurfaceError::Unsupported(
                 "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
@@ -575,10 +626,12 @@ impl WebSurfaceProducer for WpeProducer {
     }
 
     fn send_pointer_input(&mut self, event: crate::PointerInput) -> Result<(), WebSurfaceError> {
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             unsafe { super::input::dispatch_pointer(self.handles.view, &event) }
         }
-        #[cfg(not(feature = "wpe"))] {
+        #[cfg(not(feature = "wpe"))]
+        {
             let _ = event;
             Err(WebSurfaceError::Unsupported(
                 "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
@@ -602,7 +655,8 @@ impl WebSurfaceProducer for WpeProducer {
     // surface) — the producer trait is reserved for that approach.
 
     fn post_web_message(&mut self, message: &str) -> Result<(), WebSurfaceError> {
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             // Build: window.chrome.webview.__scryDispatch(<escaped message>);
             // The chrome.webview shim is injected at document-start by
             // script_message::install, so __scryDispatch is always available.
@@ -613,9 +667,7 @@ impl WebSurfaceProducer for WpeProducer {
                  window.chrome.webview.__scryDispatch({escaped});"
             );
             let c_script = std::ffi::CString::new(script).map_err(|_| {
-                WebSurfaceError::Platform(
-                    "post_web_message: script contained interior NUL".into(),
-                )
+                WebSurfaceError::Platform("post_web_message: script contained interior NUL".into())
             })?;
             // SAFETY: the webview pointer is borrowed from the producer-
             // owned glib::Object; evaluate_javascript copies its script
@@ -624,16 +676,15 @@ impl WebSurfaceProducer for WpeProducer {
             // the JS evaluation result.
             use glib::translate::ToGlibPtr;
             let raw_view: *mut super::ffi::WebKitWebView =
-                ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(
-                    &self.handles.webview,
-                ).0 as *mut _;
+                ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.handles.webview).0
+                    as *mut _;
             unsafe {
                 super::ffi::webkit_web_view_evaluate_javascript(
                     raw_view,
                     c_script.as_ptr(),
-                    -1, // NUL-terminated
-                    std::ptr::null(), // default world
-                    std::ptr::null(), // no source uri
+                    -1,                   // NUL-terminated
+                    std::ptr::null(),     // default world
+                    std::ptr::null(),     // no source uri
                     std::ptr::null_mut(), // no cancellable
                     std::ptr::null_mut(), // no completion callback
                     std::ptr::null_mut(),
@@ -641,7 +692,8 @@ impl WebSurfaceProducer for WpeProducer {
             }
             Ok(())
         }
-        #[cfg(not(feature = "wpe"))] {
+        #[cfg(not(feature = "wpe"))]
+        {
             let _ = message;
             Err(WebSurfaceError::Unsupported(
                 "WpeProducer built without the `wpe` feature; rebuild with --features wpe",
@@ -650,17 +702,25 @@ impl WebSurfaceProducer for WpeProducer {
     }
 
     fn poll_web_message(&mut self) -> Option<String> {
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             self.web_messages.borrow_mut().pop_front()
         }
-        #[cfg(not(feature = "wpe"))] { None }
+        #[cfg(not(feature = "wpe"))]
+        {
+            None
+        }
     }
 
     fn poll_cursor_shape(&mut self) -> Option<crate::CursorShape> {
-        #[cfg(feature = "wpe")] {
+        #[cfg(feature = "wpe")]
+        {
             self.cursor_shape.borrow_mut().take()
         }
-        #[cfg(not(feature = "wpe"))] { None }
+        #[cfg(not(feature = "wpe"))]
+        {
+            None
+        }
     }
 }
 
@@ -671,11 +731,11 @@ mod fd_tests {
 
     // Serialize all fd tests so parallel test threads don't recycle fd
     // numbers between the close-under-test and the fd_open assertion.
-    static FD_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-        std::sync::OnceLock::new();
+    static FD_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
 
     fn fd_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        FD_TEST_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        FD_TEST_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
             .unwrap_or_else(|e| e.into_inner())
     }
@@ -700,7 +760,11 @@ mod fd_tests {
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
             drm_format: 0,
             drm_modifier: 0,
-            planes: vec![DmaBufPlane { fd, offset: 0, stride: 16 }],
+            planes: vec![DmaBufPlane {
+                fd,
+                offset: 0,
+                stride: 16,
+            }],
             generation: 0,
             producer_sync: SyncMechanism::None,
             semaphore_fd: None,
@@ -718,8 +782,11 @@ mod fd_tests {
         sink.submit(frame_with_fd(stale_fd));
         let fresh_fd = pipe_fd();
         sink.submit(frame_with_fd(fresh_fd)); // evicts stale -> must close stale_fd
-        assert!(!fd_open(stale_fd), "stale frame's fd must be closed on eviction");
-        assert!(fd_open(fresh_fd),  "fresh frame's fd must remain open");
+        assert!(
+            !fd_open(stale_fd),
+            "stale frame's fd must be closed on eviction"
+        );
+        assert!(fd_open(fresh_fd), "fresh frame's fd must remain open");
     }
 
     // Gated to the non-wpe build so this test exercises Drop without
@@ -737,11 +804,15 @@ mod fd_tests {
             let producer = WpeProducer::new(WpeProducerConfig::new(
                 dpi::PhysicalSize::new(8, 8),
                 std::env::temp_dir(),
-            )).expect("non-wpe stub constructor must succeed");
+            ))
+            .expect("non-wpe stub constructor must succeed");
             // Inject an unconsumed frame directly into the producer's slot.
             *producer.pending_frame.lock().unwrap() = Some(frame_with_fd(leftover_fd));
             // (producer goes out of scope here -> Drop must close the fd)
         }
-        assert!(!fd_open(leftover_fd), "unconsumed frame's fd must be closed when producer drops");
+        assert!(
+            !fd_open(leftover_fd),
+            "unconsumed frame's fd must be closed when producer drops"
+        );
     }
 }

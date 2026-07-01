@@ -34,6 +34,16 @@ impl WebSurfaceProducer for WebKit6Producer {
         self.capture_native()
     }
 
+    fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
+        WebKit6Producer::load_html(self, html, None);
+        Ok(())
+    }
+
+    fn load_url(&mut self, url: &str) -> Result<(), WebSurfaceError> {
+        WebKit6Producer::load_uri(self, url);
+        Ok(())
+    }
+
     fn navigate_to_string(&mut self, html: &str, timeout: Duration) -> Result<(), WebSurfaceError> {
         arm_navigation(&self.nav_state);
         self.webview.load_html(html, None);
@@ -44,6 +54,10 @@ impl WebSurfaceProducer for WebKit6Producer {
         arm_navigation(&self.nav_state);
         self.webview.load_uri(url);
         wait_for_load(&self.nav_state, timeout)
+    }
+
+    fn set_cookie(&mut self, cookie: &crate::Cookie) -> Result<(), WebSurfaceError> {
+        WebKit6Producer::set_cookie(self, cookie)
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) -> Result<(), WebSurfaceError> {
@@ -86,13 +100,8 @@ impl WebSurfaceProducer for WebKit6Producer {
         // source-URI tagging — this is host-driven dispatch, not page
         // code. Cancellable=NONE / fire-and-forget callback mirrors the
         // GTK 3 precedent: pages without listeners are not an error.
-        self.webview.evaluate_javascript(
-            &js,
-            None,
-            None,
-            webkit6::gio::Cancellable::NONE,
-            |_| {},
-        );
+        self.webview
+            .evaluate_javascript(&js, None, None, webkit6::gio::Cancellable::NONE, |_| {});
         Ok(())
     }
 

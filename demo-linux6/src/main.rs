@@ -330,6 +330,8 @@ fn run_cookie_test(producer: &WebKit6Producer) -> Result<(), Box<dyn std::error:
         expires_at: None,
         is_secure: false,
         is_http_only: false,
+        same_site: None,
+        partitioned: false,
     };
 
     println!("setting cookie scrying_test=phaseA for {url}");

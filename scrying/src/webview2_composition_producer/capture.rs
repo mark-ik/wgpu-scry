@@ -300,7 +300,7 @@ impl WebView2CompositionProducer {
             WebView2D3D11CaptureFrame {
                 size: captured_size,
                 format: wgpu::TextureFormat::Bgra8Unorm,
-                generation: self.generation,
+                generation: self.resource_epoch,
                 raw_d3d11_texture: raw_texture,
             },
         )?;
@@ -318,7 +318,7 @@ impl WebView2CompositionProducer {
         let surface_frame = WebView2DxgiSharedHandleFrame {
             size: captured_size,
             format: wgpu::TextureFormat::Bgra8Unorm,
-            generation: self.generation,
+            generation: self.resource_epoch,
             shared_handle,
             producer_sync: self.capture_factory.sync_mechanism(),
             fence_value,
@@ -346,10 +346,11 @@ impl WebView2CompositionProducer {
             return Ok(false);
         }
         self.persistent_dest = None;
+        self.resource_epoch = self.resource_epoch.saturating_add(1);
         let texture = self.capture_factory.create_shared_texture(
             size,
             wgpu::TextureFormat::Bgra8Unorm,
-            self.generation,
+            self.resource_epoch,
         )?;
         self.persistent_dest = Some(PersistentDest {
             texture,

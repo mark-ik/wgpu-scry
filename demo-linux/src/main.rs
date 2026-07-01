@@ -703,6 +703,8 @@ fn run_cookie_test(producer: &WebKitGtkProducer) -> Result<(), Box<dyn std::erro
         expires_at: None,
         is_secure: false,
         is_http_only: false,
+        same_site: None,
+        partitioned: false,
     };
 
     println!("setting cookie scrying_test=phase2d for {url}");

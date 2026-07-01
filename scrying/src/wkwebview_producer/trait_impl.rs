@@ -54,6 +54,18 @@ impl WebSurfaceProducer for WkWebViewProducer {
         }
     }
 
+    fn try_acquire_frame(&mut self) -> Result<Option<WebSurfaceFrame>, WebSurfaceError> {
+        WkWebViewProducer::try_acquire_frame(self)
+    }
+
+    fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
+        WkWebViewProducer::load_html(self, html)
+    }
+
+    fn load_url(&mut self, url: &str) -> Result<(), WebSurfaceError> {
+        WkWebViewProducer::load_url(self, url)
+    }
+
     fn navigate_to_string(
         &mut self,
         html: &str,
@@ -96,6 +108,10 @@ impl WebSurfaceProducer for WkWebViewProducer {
             self.webview().loadRequest(&request);
         }
         self.wait_for_nav_completion(timeout, "navigate_to_url")
+    }
+
+    fn set_cookie(&mut self, cookie: &crate::Cookie) -> Result<(), WebSurfaceError> {
+        WkWebViewProducer::set_cookie(self, cookie)
     }
 
     fn move_focus(&mut self, _reason: FocusReason) -> Result<(), WebSurfaceError> {

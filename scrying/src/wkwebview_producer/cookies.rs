@@ -24,6 +24,8 @@ pub(super) fn cookie_from_ns(ns_cookie: &NSHTTPCookie) -> Cookie {
         expires_at,
         is_secure: ns_cookie.isSecure(),
         is_http_only: ns_cookie.isHTTPOnly(),
+        same_site: None,
+        partitioned: false,
     }
 }
 
@@ -52,6 +54,9 @@ pub(super) fn cookie_from_ns(ns_cookie: &NSHTTPCookie) -> Cookie {
 /// for this. Expiry, when present, uses `NSDate` directly which
 /// `NSHTTPCookie::cookieWithProperties:` accepts.
 pub(super) fn ns_cookie_from(cookie: &Cookie) -> Option<Retained<NSHTTPCookie>> {
+    if cookie.same_site.is_some() || cookie.partitioned {
+        return None;
+    }
     if cookie.is_http_only {
         return ns_cookie_from_http_only(cookie);
     }

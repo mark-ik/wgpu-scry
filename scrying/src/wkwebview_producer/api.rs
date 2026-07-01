@@ -625,6 +625,16 @@ impl WkWebViewProducer {
                 "set_cookie must be called on the main thread".into(),
             ));
         }
+        if cookie.same_site.is_some() {
+            return Err(WebSurfaceError::Unsupported(
+                "WKHTTPCookieStore path does not expose SameSite setters in scrying yet",
+            ));
+        }
+        if cookie.partitioned {
+            return Err(WebSurfaceError::Unsupported(
+                "WKHTTPCookieStore path does not expose Partitioned cookie setters in scrying yet",
+            ));
+        }
         let ns_cookie = ns_cookie_from(cookie).ok_or_else(|| {
             WebSurfaceError::Platform(
                 "could not construct NSHTTPCookie — required field (name/value/domain/path) was rejected by the cookie parser".into(),
@@ -658,6 +668,8 @@ impl WkWebViewProducer {
             expires_at: None,
             is_secure: false,
             is_http_only: false,
+            same_site: None,
+            partitioned: false,
         };
         let ns_cookie = ns_cookie_from(&placeholder).ok_or_else(|| {
             WebSurfaceError::Platform("could not construct NSHTTPCookie for deletion".into())

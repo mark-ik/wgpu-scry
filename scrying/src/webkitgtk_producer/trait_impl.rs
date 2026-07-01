@@ -31,6 +31,16 @@ impl WebSurfaceProducer for WebKitGtkProducer {
         self.capture_cpu_snapshot()
     }
 
+    fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
+        WebKitGtkProducer::load_html(self, html, None);
+        Ok(())
+    }
+
+    fn load_url(&mut self, url: &str) -> Result<(), WebSurfaceError> {
+        WebKitGtkProducer::load_uri(self, url);
+        Ok(())
+    }
+
     fn navigate_to_string(&mut self, html: &str, timeout: Duration) -> Result<(), WebSurfaceError> {
         arm_navigation(&self.nav_state);
         self.webview.load_html(html, None);
@@ -41,6 +51,10 @@ impl WebSurfaceProducer for WebKitGtkProducer {
         arm_navigation(&self.nav_state);
         self.webview.load_uri(url);
         wait_for_load(&self.nav_state, timeout)
+    }
+
+    fn set_cookie(&mut self, cookie: &crate::Cookie) -> Result<(), WebSurfaceError> {
+        WebKitGtkProducer::set_cookie(self, cookie)
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) -> Result<(), WebSurfaceError> {

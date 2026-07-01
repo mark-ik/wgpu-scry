@@ -164,7 +164,10 @@ fn input_dispatch_does_not_crash() {
          chrome.webview shim injection are wired correctly end-to-end.",
         msg
     );
-    eprintln!("input smoke: chrome.webview.postMessage round-trip = {:?}", msg);
+    eprintln!(
+        "input smoke: chrome.webview.postMessage round-trip = {:?}",
+        msg
+    );
 
     // --- 4c.5.b — cookie store round-trip ---
     //
@@ -184,6 +187,8 @@ fn input_dispatch_does_not_crash() {
         expires_at: None, // session cookie
         is_secure: false,
         is_http_only: false,
+        same_site: None,
+        partitioned: false,
     };
     producer.set_cookie(&probe).expect("set_cookie round-trip");
     let cookies = producer

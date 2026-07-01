@@ -1875,6 +1875,8 @@ fn advance_profile_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 expires_at: None,
                 is_secure: false,
                 is_http_only: false,
+                same_site: None,
+                partitioned: false,
             };
             if let Err(e) = state.producer.set_cookie(&cookie) {
                 test.failures
@@ -2720,6 +2722,8 @@ fn advance_incognito_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 expires_at: None,
                 is_secure: false,
                 is_http_only: true,
+                same_site: None,
+                partitioned: false,
             };
             if let Err(e) = state.producer.set_cookie(&cookie) {
                 test.failures

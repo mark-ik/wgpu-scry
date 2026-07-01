@@ -85,12 +85,9 @@ impl WpeProducer {
     pub fn request_cookies_for_url(&self, url: &str) -> Result<Vec<Cookie>, WebSurfaceError> {
         let manager = self.cookie_manager();
         let c_url = std::ffi::CString::new(url).map_err(|_| {
-            WebSurfaceError::Platform(
-                "request_cookies_for_url: URL contained interior NUL".into(),
-            )
+            WebSurfaceError::Platform("request_cookies_for_url: URL contained interior NUL".into())
         })?;
-        let result: Rc<RefCell<Option<Result<Vec<Cookie>, String>>>> =
-            Rc::new(RefCell::new(None));
+        let result: Rc<RefCell<Option<Result<Vec<Cookie>, String>>>> = Rc::new(RefCell::new(None));
         // The trampoline takes ownership of one Rc clone via the box;
         // we keep the other Rc clone here for the drain after pumping.
         let boxed: Box<GetUserData> = Box::new((manager, result.clone()));
@@ -137,6 +134,18 @@ impl WpeProducer {
     /// difference is which start/finish FFI pair runs, captured by
     /// [`CookieOp`].
     fn run_op_cookie(&self, cookie: &Cookie, op: CookieOp) -> Result<(), WebSurfaceError> {
+        if matches!(op, CookieOp::Add) {
+            if cookie.same_site.is_some() {
+                return Err(WebSurfaceError::Unsupported(
+                    "WPE cookie manager path does not expose SameSite setters in scrying yet",
+                ));
+            }
+            if cookie.partitioned {
+                return Err(WebSurfaceError::Unsupported(
+                    "WPE cookie manager path does not expose Partitioned cookie setters in scrying yet",
+                ));
+            }
+        }
         let manager = self.cookie_manager();
         // soup3 0.5's `to_glib_none` for `Cookie` takes `&mut self`,
         // matching the precedent — materialize a local mutable cookie.
@@ -152,10 +161,7 @@ impl WpeProducer {
             ToGlibPtr::<*mut soup::ffi::SoupCookie>::to_glib_none(&mut soup_cookie).0
                 as *mut std::ffi::c_void;
         let (start, trampoline): (CookieOpStart, ffi::GAsyncReadyCallback) = match op {
-            CookieOp::Add => (
-                ffi::webkit_cookie_manager_add_cookie,
-                cookie_add_trampoline,
-            ),
+            CookieOp::Add => (ffi::webkit_cookie_manager_add_cookie, cookie_add_trampoline),
             CookieOp::Delete => (
                 ffi::webkit_cookie_manager_delete_cookie,
                 cookie_delete_trampoline,
@@ -240,9 +246,8 @@ unsafe extern "C" fn cookie_get_trampoline(
     // op because the producer is thread-affine and we don't drop the
     // producer between op-start and op-finish. `result` is the per-op
     // GAsyncResult webkit hands us.
-    let g_list = unsafe {
-        ffi::webkit_cookie_manager_get_cookies_finish(manager, result, &mut error)
-    };
+    let g_list =
+        unsafe { ffi::webkit_cookie_manager_get_cookies_finish(manager, result, &mut error) };
     if !error.is_null() {
         // SAFETY: `error` is a transfer-full GError* from the _finish
         // FFI; `from_glib_full` adopts ownership and frees on drop.
@@ -291,9 +296,7 @@ unsafe extern "C" fn cookie_add_trampoline(
     let boxed: Box<OpUserData> = unsafe { Box::from_raw(user_data as *mut OpUserData) };
     let (manager, cell) = *boxed;
     let mut error: *mut glib::ffi::GError = std::ptr::null_mut();
-    let ok = unsafe {
-        ffi::webkit_cookie_manager_add_cookie_finish(manager, result, &mut error)
-    };
+    let ok = unsafe { ffi::webkit_cookie_manager_add_cookie_finish(manager, result, &mut error) };
     finish_op_into_cell(ok, error, &cell);
 }
 
@@ -307,9 +310,8 @@ unsafe extern "C" fn cookie_delete_trampoline(
     let boxed: Box<OpUserData> = unsafe { Box::from_raw(user_data as *mut OpUserData) };
     let (manager, cell) = *boxed;
     let mut error: *mut glib::ffi::GError = std::ptr::null_mut();
-    let ok = unsafe {
-        ffi::webkit_cookie_manager_delete_cookie_finish(manager, result, &mut error)
-    };
+    let ok =
+        unsafe { ffi::webkit_cookie_manager_delete_cookie_finish(manager, result, &mut error) };
     finish_op_into_cell(ok, error, &cell);
 }
 
@@ -331,9 +333,7 @@ fn finish_op_into_cell(
         return;
     }
     if ok == 0 {
-        *cell.borrow_mut() = Some(Err(
-            "operation returned FALSE without setting GError".into(),
-        ));
+        *cell.borrow_mut() = Some(Err("operation returned FALSE without setting GError".into()));
         return;
     }
     *cell.borrow_mut() = Some(Ok(()));
@@ -350,6 +350,8 @@ fn soup_to_scry(mut sc: SoupCookie) -> Cookie {
         expires_at: sc.expires().map(|dt| dt.to_unix() as f64),
         is_secure: sc.is_secure(),
         is_http_only: sc.is_http_only(),
+        same_site: None,
+        partitioned: false,
     }
 }
 

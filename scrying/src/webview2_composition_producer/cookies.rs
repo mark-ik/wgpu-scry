@@ -170,6 +170,8 @@ unsafe fn cookie_from_webview2(cookie: &ICoreWebView2Cookie) -> Result<Cookie, W
         },
         is_secure: is_secure.as_bool(),
         is_http_only: is_http_only.as_bool(),
+        same_site: None,
+        partitioned: false,
     })
 }
 
@@ -191,6 +193,16 @@ unsafe fn webview2_cookie_from(
     manager: &ICoreWebView2CookieManager,
     cookie: &Cookie,
 ) -> Result<ICoreWebView2Cookie, WebSurfaceError> {
+    if cookie.same_site.is_some() {
+        return Err(WebSurfaceError::Unsupported(
+            "WebView2 cookie manager path does not expose SameSite setters in scrying yet",
+        ));
+    }
+    if cookie.partitioned {
+        return Err(WebSurfaceError::Unsupported(
+            "WebView2 cookie manager path does not expose Partitioned cookie setters in scrying yet",
+        ));
+    }
     let name = CoTaskMemPWSTR::from(cookie.name.as_str());
     let value = CoTaskMemPWSTR::from(cookie.value.as_str());
     let domain = CoTaskMemPWSTR::from(cookie.domain.as_str());

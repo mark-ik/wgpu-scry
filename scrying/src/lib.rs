@@ -864,12 +864,19 @@ pub enum PermissionDecision {
     Prompt,
 }
 
-/// HTTP cookie payload used by the producer's cookie-store API
-/// (`request_all_cookies` / `set_cookie` / `delete_cookie` on the
-/// macOS and Windows producers). Mirrors the subset of native cookies that
-/// browser-shape consumers actually need; `expires_at` is a Unix
-/// timestamp (seconds since 1970-01-01 UTC), `None` for session
-/// cookies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SameSite {
+    Strict,
+    Lax,
+    None,
+}
+
+/// HTTP cookie payload used by the producer's cookie-store API.
+///
+/// `expires_at` is a Unix timestamp (seconds since 1970-01-01 UTC), `None`
+/// for session cookies. The shape intentionally carries the full browser
+/// session record; producer setters return `Unsupported` when a backend cannot
+/// faithfully apply a field such as `Partitioned`.
 #[derive(Clone, Debug)]
 pub struct Cookie {
     pub name: String,
@@ -879,6 +886,8 @@ pub struct Cookie {
     pub expires_at: Option<f64>,
     pub is_secure: bool,
     pub is_http_only: bool,
+    pub same_site: Option<SameSite>,
+    pub partitioned: bool,
 }
 
 /// Reason supplied to a focus move.
@@ -1213,6 +1222,36 @@ pub trait WebSurfaceProducer {
     /// produce one.
     fn acquire_frame(&mut self) -> Result<WebSurfaceFrame, WebSurfaceError>;
 
+    /// Non-blocking acquire. Returns `Ok(None)` when no fresh frame is
+    /// currently queued.
+    fn try_acquire_frame(&mut self) -> Result<Option<WebSurfaceFrame>, WebSurfaceError> {
+        self.acquire_frame().map(Some)
+    }
+
+    /// Restart a backend capture session after repeated empty non-blocking
+    /// polls. Most producers do not need this; Windows Graphics Capture does.
+    fn restart_capture_after_stall(&mut self) -> Result<(), WebSurfaceError> {
+        Ok(())
+    }
+
+    /// Begin a non-blocking inline-HTML navigation. Completion is observed via
+    /// [`Self::poll_navigation_event`].
+    fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
+        let _ = html;
+        Err(WebSurfaceError::Unsupported(
+            "WebSurfaceProducer::load_html is not implemented for this platform",
+        ))
+    }
+
+    /// Begin a non-blocking URL navigation. Completion is observed via
+    /// [`Self::poll_navigation_event`].
+    fn load_url(&mut self, url: &str) -> Result<(), WebSurfaceError> {
+        let _ = url;
+        Err(WebSurfaceError::Unsupported(
+            "WebSurfaceProducer::load_url is not implemented for this platform",
+        ))
+    }
+
     /// Navigate the underlying WebView to inline HTML and block until
     /// `NavigationCompleted` (or analog) fires, or the timeout elapses.
     /// Producers that don't yet support navigation return
@@ -1324,6 +1363,26 @@ pub trait WebSurfaceProducer {
     /// queued FIFO per producer.
     fn poll_web_message(&mut self) -> Option<String> {
         None
+    }
+
+    /// Set / overwrite one cookie in the webview's store.
+    fn set_cookie(&mut self, cookie: &Cookie) -> Result<(), WebSurfaceError> {
+        let _ = cookie;
+        Err(WebSurfaceError::Unsupported(
+            "WebSurfaceProducer::set_cookie is not implemented for this platform",
+        ))
+    }
+
+    /// Execute JavaScript and return the engine's serialized result.
+    fn execute_script_with_result(
+        &mut self,
+        script: &str,
+        timeout: std::time::Duration,
+    ) -> Result<String, WebSurfaceError> {
+        let _ = (script, timeout);
+        Err(WebSurfaceError::Unsupported(
+            "WebSurfaceProducer::execute_script_with_result is not implemented for this platform",
+        ))
     }
 
     /// Take a one-shot PNG snapshot of the current webview document.

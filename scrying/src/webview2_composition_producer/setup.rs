@@ -409,6 +409,7 @@ impl WebView2CompositionProducer {
             parent_hwnd,
             size: config.size,
             generation: 0,
+            resource_epoch: 0,
             composition_root: composition_root.clone(),
             pane_container,
             webview_visual,

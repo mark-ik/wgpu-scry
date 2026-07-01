@@ -37,9 +37,9 @@ use super::producer::WebKit6Producer;
 
 impl WebKit6Producer {
     fn cookie_manager(&self) -> Result<CookieManager, WebSurfaceError> {
-        self._network_session.cookie_manager().ok_or_else(|| {
-            WebSurfaceError::Platform("NetworkSession has no cookie manager".into())
-        })
+        self._network_session
+            .cookie_manager()
+            .ok_or_else(|| WebSurfaceError::Platform("NetworkSession has no cookie manager".into()))
     }
 
     /// Fetch all cookies the store currently has for `url`, blocking
@@ -69,6 +69,16 @@ impl WebKit6Producer {
     /// Add a cookie to the store, blocking until the async add
     /// completes.
     pub fn set_cookie(&self, cookie: &Cookie) -> Result<(), WebSurfaceError> {
+        if cookie.same_site.is_some() {
+            return Err(WebSurfaceError::Unsupported(
+                "WebKitGTK 6 cookie manager path does not expose SameSite setters in scrying yet",
+            ));
+        }
+        if cookie.partitioned {
+            return Err(WebSurfaceError::Unsupported(
+                "WebKitGTK 6 cookie manager path does not expose Partitioned cookie setters in scrying yet",
+            ));
+        }
         let soup_cookie = scry_to_soup(cookie);
         let manager = self.cookie_manager()?;
         let done: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
@@ -117,6 +127,8 @@ fn soup_to_scry(mut sc: SoupCookie) -> Cookie {
         expires_at: sc.expires().map(|dt| dt.to_unix() as f64),
         is_secure: sc.is_secure(),
         is_http_only: sc.is_http_only(),
+        same_site: None,
+        partitioned: false,
     }
 }
 

@@ -291,7 +291,11 @@ pub struct WebView2CompositionProducer {
     #[allow(dead_code)]
     parent_hwnd: HWND,
     size: PhysicalSize<u32>,
+    /// Content-frame counter. Bumps for every emitted capture frame.
     generation: u64,
+    /// Shared-resource allocation counter. Bumps only when the persistent
+    /// destination texture is allocated or reallocated.
+    resource_epoch: u64,
 
     /// Shared per-HWND composition target. Held so the `DesktopWindowTarget`
     /// outlives every producer attached to it; for a single-pane producer the
@@ -402,6 +406,23 @@ impl crate::WebSurfaceProducer for WebView2CompositionProducer {
         Ok(full.frame)
     }
 
+    fn try_acquire_frame(&mut self) -> Result<Option<WebSurfaceFrame>, WebSurfaceError> {
+        WebView2CompositionProducer::try_acquire_frame(self).map(|frame| frame.map(|f| f.frame))
+    }
+
+    fn restart_capture_after_stall(&mut self) -> Result<(), WebSurfaceError> {
+        WebView2CompositionProducer::force_restart_capture(self);
+        Ok(())
+    }
+
+    fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
+        WebView2CompositionProducer::load_html(self, html)
+    }
+
+    fn load_url(&mut self, url: &str) -> Result<(), WebSurfaceError> {
+        WebView2CompositionProducer::load_url(self, url)
+    }
+
     fn navigate_to_string(
         &mut self,
         html: &str,
@@ -448,6 +469,18 @@ impl crate::WebSurfaceProducer for WebView2CompositionProducer {
 
     fn poll_web_message(&mut self) -> Option<String> {
         WebView2CompositionProducer::poll_web_message(self)
+    }
+
+    fn set_cookie(&mut self, cookie: &crate::Cookie) -> Result<(), WebSurfaceError> {
+        WebView2CompositionProducer::set_cookie(self, cookie)
+    }
+
+    fn execute_script_with_result(
+        &mut self,
+        script: &str,
+        timeout: std::time::Duration,
+    ) -> Result<String, WebSurfaceError> {
+        WebView2CompositionProducer::execute_script_with_result(self, script, timeout)
     }
 
     fn capture_snapshot_png(&mut self) -> Result<Vec<u8>, WebSurfaceError> {

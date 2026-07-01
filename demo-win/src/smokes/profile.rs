@@ -18,6 +18,8 @@ pub(crate) fn validate_platform_profile_store(
         expires_at: Some(4_102_444_800.0),
         is_secure: false,
         is_http_only: false,
+        same_site: None,
+        partitioned: false,
     };
 
     let _ = producer.delete_cookie(&cookie.name, &cookie.domain, &cookie.path);
@@ -85,6 +87,8 @@ pub(crate) fn validate_platform_incognito_store(
         expires_at: Some(4_102_444_800.0),
         is_secure: false,
         is_http_only: false,
+        same_site: None,
+        partitioned: false,
     };
 
     let _ = incognito.delete_cookie(&cookie.name, &cookie.domain, &cookie.path);
@@ -140,6 +144,8 @@ pub(crate) fn validate_platform_cookie_store(
         expires_at: None,
         is_secure: false,
         is_http_only: true,
+        same_site: None,
+        partitioned: false,
     };
 
     let _ = producer.delete_cookie(&cookie.name, &cookie.domain, &cookie.path);
