@@ -4,7 +4,7 @@ Capability-driven system-webview adapter — scry into WebView2/WKWebView/WPE/We
 
 The name comes from *scrying* — gazing into a reflective surface for visions. The webview is the surface; the captured frame is the vision; this crate is the lens.
 
-This crate is the home for system-webview-backed frame production. It is deliberately separate from [`wgpu-native-texture-interop`](https://github.com/mark-ik/wgpu-graft) (sibling repo): the native interop crate imports GPU resources, while this adapter owns system-webview probing, fallback selection, and platform-specific frame-source integration.
+This crate is the home for system-webview-backed frame production. It is deliberately separate from [`wgpu-native-texture-interop`](https://github.com/merely-made/wgpu-graft) (sibling repo): the native interop crate imports GPU resources, while this adapter owns system-webview probing, fallback selection, and platform-specific frame-source integration.
 
 ## Current slice
 

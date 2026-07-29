@@ -1108,7 +1108,7 @@ Scrying owns its native-frame import path in-tree as the
 [`scrying::native_frame`](../scrying/src/native_frame/) module. It is
 **not** a dependency on a sibling crate. This was a deliberate split
 from the original plan to share `wgpu-native-texture-interop` with
-[`wgpu-graft`](https://github.com/mark-ik/wgpu-graft).
+[`wgpu-graft`](https://github.com/merely-made/wgpu-graft).
 
 **Why in-tree**: the two projects' producers have different shapes.
 wgpu-graft consumes Servo via surfman GL framebuffer surfaces and

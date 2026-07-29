@@ -61,10 +61,10 @@ version bump to this one.
 
 ### 3. Out of scope
 
-- **CEF / Chromium** → [`wgpu-weld`](https://github.com/mark-ik/wgpu-weld)'s
+- **CEF / Chromium** → [`wgpu-weld`](https://github.com/merely-made/wgpu-weld)'s
   job. Not WebKit-family, not "system webview" on Linux (apps vendor
   their own copy), different threading + sync story. Stays parked.
-- **Servo** → [`wgpu-graft`](https://github.com/mark-ik/wgpu-graft)'s
+- **Servo** → [`wgpu-graft`](https://github.com/merely-made/wgpu-graft)'s
   job. Already covered there.
 - **QtWebEngine** → cross-toolkit Chromium re-skin; same scope reasons
   as CEF without the installed-base argument.

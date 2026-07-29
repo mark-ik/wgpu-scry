@@ -8,7 +8,7 @@ The library crate is [`scrying`](scrying/). The name comes from *scrying* —
 gazing into a reflective surface for visions. The webview is the surface, the
 captured frame is the vision, and this crate is the lens.
 
-This repo was extracted from [`wgpu-graft`](https://github.com/mark-ik/wgpu-graft)
+This repo was extracted from [`wgpu-graft`](https://github.com/merely-made/wgpu-graft)
 on 2026-05-05 so that system-webview frame production has its own place to
 evolve. `scrying` owns its native-frame import path in-tree as the
 [`scrying::native_frame`](scrying/src/native_frame/) module, structurally
@@ -87,7 +87,7 @@ unsupported. CI targets `macos-latest`.
 
 ```toml
 [dependencies]
-scrying = { git = "https://github.com/mark-ik/wgpu-scry" }
+scrying = { git = "https://github.com/merely-made/wgpu-scry" }
 ```
 
 `scrying` is not yet published to crates.io. The crate's default feature set is
@@ -294,7 +294,7 @@ engine embedding by engine target:
 
 - **`wgpu-scry`** (this repo) — system webviews (WebKit family): WebView2 on
   Windows, WKWebView on macOS, WebKitGTK 4.1 / 6.0 / WPE on Linux.
-- **[`wgpu-graft`](https://github.com/mark-ik/wgpu-graft)** — Servo embedding: a
+- **[`wgpu-graft`](https://github.com/merely-made/wgpu-graft)** — Servo embedding: a
   single Servo producer over GL-FBO interop, demoed across host frameworks
   (winit, egui, iced, Blitz, Slint, Bevy, xilem, gpui).
 - **`wgpu-weld`** — CEF / Chromium embedding.

@@ -13,7 +13,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 license = "MPL-2.0"
-repository = "https://github.com/mark-ik/wgpu-scry"
+repository = "https://github.com/merely-made/wgpu-scry"
 version = "0.1.0"
 
 # Centralized load-bearing pins. Aligned with the wider Mere ecosystem
