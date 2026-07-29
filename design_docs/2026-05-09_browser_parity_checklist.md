@@ -6,7 +6,7 @@ paths, and the macOS producer's slice-by-slice landing notes with
 implementation specifics. **This** doc is the flat, scannable
 checklist of everything an embeddable system-WebView library needs
 to be a "real" browser-class building block — something a tabbed
-browser shell (e.g. [`mark-ik/mere`](https://github.com/mark-ik/mere))
+browser shell (e.g. [`merely-made/mere`](https://github.com/merely-made/mere))
 can be built on top of without going around it for any meaningful
 capability.
 

@@ -652,7 +652,7 @@ independently when the work is ready:
 ## Browser-class consumer roadmap
 
 Beyond the parity baseline, an embeddable WebView library has to
-support a browser-shape consumer (e.g. [`mark-ik/mere`](https://github.com/mark-ik/mere)):
+support a browser-shape consumer (e.g. [`merely-made/mere`](https://github.com/merely-made/mere)):
 multiple tabs per process, full navigation control, customizable
 chrome, robust lifecycle hooks. Items 1–9 below landed in 0.4.x;
 each has a brief notes column describing the API shape and known
