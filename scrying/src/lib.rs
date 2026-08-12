@@ -193,6 +193,9 @@ impl WebSurfaceCapabilities {
                 }
             }
             SystemWebviewBackend::Wpe => {
+                // The mutation below is Linux-only; other targets see an
+                // unused `mut` without the cfg_attr.
+                #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
                 let mut caps = linux_wpe_capabilities();
                 // After Phase 4a, the WPE column's `imported_texture`
                 // depends on whether the host's wgpu Vulkan device

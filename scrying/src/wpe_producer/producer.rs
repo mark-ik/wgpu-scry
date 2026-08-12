@@ -505,7 +505,21 @@ impl WebSurfaceProducer for WpeProducer {
     }
 
     fn set_cookie(&mut self, cookie: &crate::Cookie) -> Result<(), WebSurfaceError> {
-        WpeProducer::set_cookie(self, cookie)
+        // The inherent set_cookie lives in the `wpe`-gated cookies module;
+        // without the feature this call would resolve back to this trait
+        // method and recurse forever (rustc catches it as unconditional
+        // recursion on non-wpe builds).
+        #[cfg(feature = "wpe")]
+        {
+            WpeProducer::set_cookie(self, cookie)
+        }
+        #[cfg(not(feature = "wpe"))]
+        {
+            let _ = cookie;
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
+        }
     }
 
     /// Resize the producer's render target.
