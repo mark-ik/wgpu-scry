@@ -425,6 +425,11 @@ pub(super) fn import(
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
+            // wgpu 30: initial state of the wrapped resource — matches the
+            // hal descriptor's RESOURCE usage above (the frame arrives
+            // fully rendered by the webview; the semaphore wait below
+            // orders the read).
+            wgpu::TextureUses::RESOURCE,
         );
 
         // ---- 6. Optional: producer-sync semaphore wait ----
