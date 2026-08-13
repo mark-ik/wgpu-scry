@@ -20,7 +20,7 @@ version = "0.1.0"
 # (mere/Cargo.toml's workspace.dependencies) so cargo unifies versions
 # when scry is path-dep'd from mere-host-runtime / scrying-tile-engine.
 [workspace.dependencies]
-wgpu = "29"
+wgpu = "30"
 winit = "0.30.13"
 raw-window-handle = "0.6.2"
 dpi = "0.1.2"

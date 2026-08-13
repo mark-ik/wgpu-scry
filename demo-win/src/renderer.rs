@@ -94,6 +94,9 @@ impl WebViewRenderer {
         let size = window.inner_size();
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            // wgpu 30: limit bucketing is for hosts exposing wgpu to
+            // untrusted content; a local demo keeps real limits.
+            apply_limit_buckets: false,
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
@@ -108,6 +111,8 @@ impl WebViewRenderer {
             .unwrap_or_else(|| caps.formats[0]);
 
         let surface_config = wgpu::SurfaceConfiguration {
+            // wgpu 30: Auto reproduces the historical color-space choice.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
@@ -457,7 +462,8 @@ impl WebViewRenderer {
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         self.window.pre_present_notify();
-        frame.present();
+        // wgpu 30: presentation moved to the queue.
+        self.queue.present(frame);
         Ok(())
     }
 }

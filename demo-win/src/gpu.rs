@@ -62,7 +62,10 @@ pub(crate) fn validate_imported_pixels(
     rx.recv()
         .map_err(|error| format!("readback channel closed: {error}"))?
         .map_err(|error| format!("buffer map failed: {error}"))?;
-    let data = slice.get_mapped_range();
+    // wgpu 30: mapping can fail; surface it like the map_err above.
+    let data = slice
+        .get_mapped_range()
+        .map_err(|error| format!("mapped range unavailable: {error}"))?;
 
     let row_stride = padded_bytes_per_row as usize;
     let sample = |x: u32, y: u32| -> [u8; 4] {
@@ -148,6 +151,9 @@ pub(crate) async fn create_host_device() -> Result<
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
+            // wgpu 30: limit bucketing is for hosts exposing wgpu to
+            // untrusted content; a local demo keeps real limits.
+            apply_limit_buckets: false,
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,

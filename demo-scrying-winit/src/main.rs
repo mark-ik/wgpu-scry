@@ -130,6 +130,9 @@ async fn create_host_device() -> Result<
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
+            // wgpu 30: limit bucketing is for hosts exposing wgpu to
+            // untrusted content; a local demo keeps real limits.
+            apply_limit_buckets: false,
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,

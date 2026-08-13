@@ -101,6 +101,9 @@ impl WgpuRender {
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
+                // wgpu 30: limit bucketing is for hosts exposing wgpu to
+                // untrusted content; a local demo keeps real limits.
+                apply_limit_buckets: false,
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
@@ -127,6 +130,8 @@ impl WgpuRender {
             .unwrap_or(caps.formats[0]);
 
         let surface_config = wgpu::SurfaceConfiguration {
+            // wgpu 30: Auto reproduces the historical color-space choice.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
@@ -299,7 +304,8 @@ impl WgpuRender {
         self.device.poll(wgpu::PollType::wait_indefinitely())?;
         receiver.recv()??;
 
-        let view = slice.get_mapped_range();
+        // wgpu 30: mapping can fail; surface it like the recv above.
+        let view = slice.get_mapped_range()?;
         // Strip the per-row padding into a packed BGRA8 buffer, then
         // swap to RGBA8 for the `image` crate's PNG encoder.
         let mut rgba = Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
@@ -468,7 +474,8 @@ impl WgpuRender {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        surface_texture.present();
+        // wgpu 30: presentation moved to the queue.
+        self.queue.present(surface_texture);
 
         self.maybe_log_metrics(producer);
 

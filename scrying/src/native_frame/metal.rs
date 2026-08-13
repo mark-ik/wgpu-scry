@@ -50,6 +50,9 @@ pub(super) fn import(
                 height: frame.size.height,
                 depth: 1,
             },
+            // wgpu 30: optional drop callback — the Retained above already
+            // owns the reference; nothing extra to run on drop.
+            None,
         );
 
         host.device
@@ -69,6 +72,11 @@ pub(super) fn import(
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
                     view_formats: &[],
                 },
+                // wgpu 30: initial state of the wrapped resource. The frame
+                // arrives fully rendered by the webview — candidate state
+                // RESOURCE (shader-readable); validate against the state
+                // tracker in the real integration.
+                wgpu::TextureUses::RESOURCE,
             )
     };
 
@@ -80,3 +88,4 @@ pub(super) fn import(
         consumer_sync: frame.producer_sync,
     })
 }
+            
