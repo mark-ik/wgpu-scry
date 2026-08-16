@@ -62,7 +62,7 @@ pub(crate) fn validate_imported_pixels(
     rx.recv()
         .map_err(|error| format!("readback channel closed: {error}"))?
         .map_err(|error| format!("buffer map failed: {error}"))?;
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("map range");
 
     let row_stride = padded_bytes_per_row as usize;
     let sample = |x: u32, y: u32| -> [u8; 4] {
@@ -151,6 +151,8 @@ pub(crate) async fn create_host_device() -> Result<
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            // wgpu 30 limit bucketing, off to keep the adapter's real limits.
+            apply_limit_buckets: false,
         })
         .await
         .map_err(|error| format!("adapter request failed: {error}"))?;

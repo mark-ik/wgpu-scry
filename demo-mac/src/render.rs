@@ -104,6 +104,8 @@ impl WgpuRender {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                // wgpu 30 limit bucketing, off to keep the adapter's real limits.
+                apply_limit_buckets: false,
             })
             .await?;
 
@@ -132,6 +134,8 @@ impl WgpuRender {
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: caps.present_modes[0],
+            // wgpu 30 made surface color space explicit; Auto keeps pre-30 behavior.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -299,7 +303,7 @@ impl WgpuRender {
         self.device.poll(wgpu::PollType::wait_indefinitely())?;
         receiver.recv()??;
 
-        let view = slice.get_mapped_range();
+        let view = slice.get_mapped_range().expect("map range");
         // Strip the per-row padding into a packed BGRA8 buffer, then
         // swap to RGBA8 for the `image` crate's PNG encoder.
         let mut rgba = Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
@@ -468,7 +472,8 @@ impl WgpuRender {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        surface_texture.present();
+        // wgpu 30 moved presentation from SurfaceTexture to Queue.
+        self.queue.present(surface_texture);
 
         self.maybe_log_metrics(producer);
 

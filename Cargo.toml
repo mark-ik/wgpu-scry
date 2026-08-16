@@ -18,8 +18,11 @@ version = "0.1.0"
 
 # Demo/default pins. The scrying library carries feature-selected wgpu
 # dependencies so hosts on adjacent majors do not have to move in lockstep.
+# This pin must track scrying's default row: demo-win and demo-mac take
+# `wgpu.workspace = true` AND `scrying` with default features, so a mismatch
+# puts two wgpu majors in one demo graph.
 [workspace.dependencies]
-wgpu = "29"
+wgpu = "30"
 winit = "0.30.13"
 raw-window-handle = "0.6.2"
 dpi = "0.1.2"

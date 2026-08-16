@@ -681,7 +681,7 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "scrying",
- "wgpu 29.0.3",
+ "wgpu 30.0.0",
  "winit",
 ]
 
@@ -703,7 +703,7 @@ dependencies = [
  "raw-window-handle",
  "scrying",
  "webview2-com",
- "wgpu 29.0.3",
+ "wgpu 30.0.0",
  "windows",
  "winit",
 ]

@@ -7,7 +7,7 @@ repository = "https://github.com/merely-made/wgpu-scry"
 description = "Capability-driven system-webview frame adapter — scry into WebView2/WKWebView/WebKitGTK and produce wgpu-importable frames"
 
 [features]
-default = ["wgpu-29"]
+default = ["wgpu-30"]
 # Pick the row matching the host's wgpu. The newest enabled row wins when
 # features unify, so --all-features remains useful.
 wgpu-30 = [

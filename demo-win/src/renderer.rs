@@ -97,6 +97,8 @@ impl WebViewRenderer {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            // wgpu 30 limit bucketing, off to keep the adapter's real limits.
+            apply_limit_buckets: false,
         }))
         .map_err(|error| format!("renderer adapter request failed: {error}"))?;
         let caps = surface.get_capabilities(&adapter);
@@ -113,6 +115,8 @@ impl WebViewRenderer {
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::Fifo,
+            // wgpu 30 made surface color space explicit; Auto keeps pre-30 behavior.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -457,7 +461,8 @@ impl WebViewRenderer {
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         self.window.pre_present_notify();
-        frame.present();
+        // wgpu 30 moved presentation from SurfaceTexture to Queue.
+        self.queue.present(frame);
         Ok(())
     }
 }
