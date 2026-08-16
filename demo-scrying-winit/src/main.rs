@@ -130,6 +130,8 @@ async fn create_host_device() -> Result<
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
+            // This local smoke host does not expose wgpu to untrusted content.
+            apply_limit_buckets: false,
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,

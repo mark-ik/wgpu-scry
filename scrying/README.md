@@ -6,6 +6,11 @@ The name comes from *scrying* — gazing into a reflective surface for visions. 
 
 This crate is the home for system-webview-backed frame production. It is deliberately separate from [`wgpu-native-texture-interop`](https://github.com/merely-made/wgpu-graft) (sibling repo): the native interop crate imports GPU resources, while this adapter owns system-webview probing, fallback selection, and platform-specific frame-source integration.
 
+The crate defaults to wgpu 29 and also carries `wgpu-28` and `wgpu-30`
+features. Pick the row matching the host, with default features disabled for
+28 or 30. `scrying::wgpu` re-exports the selected version so public device and
+texture types cannot silently come from a different major.
+
 ## Current slice
 
 The shared contract:

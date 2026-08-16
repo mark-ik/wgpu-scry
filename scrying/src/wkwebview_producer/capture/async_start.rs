@@ -75,14 +75,11 @@ impl WkWebViewProducer {
         }
 
         let metal_device: Retained<ProtocolObject<dyn MTLDevice>> = unsafe {
-            host.device
-                .as_hal::<wgpu::wgc::api::Metal>()
-                .ok_or_else(|| {
-                    WebSurfaceError::Platform("host wgpu device is not on the Metal backend".into())
-                })?
-                .raw_device()
-                .clone()
-        };
+            crate::wgpu_compat::metal_device(&host.device)
+        }
+        .ok_or_else(|| {
+            WebSurfaceError::Platform("host wgpu device is not on the Metal backend".into())
+        })?;
 
         let host_window = self.webview.window().ok_or_else(|| {
             WebSurfaceError::Platform(

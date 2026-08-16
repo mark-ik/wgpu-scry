@@ -16,9 +16,8 @@ license = "MPL-2.0"
 repository = "https://github.com/merely-made/wgpu-scry"
 version = "0.1.0"
 
-# Centralized load-bearing pins. Aligned with the wider Mere ecosystem
-# (mere/Cargo.toml's workspace.dependencies) so cargo unifies versions
-# when scry is path-dep'd from mere-host-runtime / scrying-tile-engine.
+# Demo/default pins. The scrying library carries feature-selected wgpu
+# dependencies so hosts on adjacent majors do not have to move in lockstep.
 [workspace.dependencies]
 wgpu = "29"
 winit = "0.30.13"

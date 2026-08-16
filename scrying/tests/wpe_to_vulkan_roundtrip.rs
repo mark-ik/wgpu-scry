@@ -18,6 +18,7 @@
 #![cfg(all(target_os = "linux", feature = "wpe"))]
 
 use dpi::PhysicalSize;
+use scrying::wgpu;
 use scrying::wpe_producer::{WpeProducer, WpeProducerConfig};
 use scrying::{
     DmaBufImage, HostWgpuContext, ImportOptions, ImportedTexture, NativeFrame, NavigationEvent,

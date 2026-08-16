@@ -40,12 +40,20 @@ pipeline. Not yet on crates.io; take it as a git dependency:
 ```toml
 [dependencies]
 scrying = { git = "https://github.com/merely-made/wgpu-scry" }
+
+# Hosts on an adjacent wgpu major select it explicitly.
+scrying = { git = "https://github.com/merely-made/wgpu-scry", default-features = false, features = ["wgpu-30"] }
 ```
 
-Default features are empty. On Linux pick exactly one of
-`webkitgtk-fallback`, `webkit6`, or `wpe` (omitting all three selects WPE).
+The default wgpu row is 29. `wgpu-28`, `wgpu-29`, and `wgpu-30` are carried;
+disable default features when selecting 28 or 30. On Linux, combine that row
+with one of `webkitgtk-fallback`, `webkit6`, or `wpe` (omitting all three
+selects WPE).
 
-Each backend has a runnable demo probe with flagged assertion modes:
+Each backend has a runnable demo probe with flagged assertion modes. The
+cross-platform probe intentionally pins wgpu 30 and selects scrying's
+`wgpu-30` feature, so it is a compiled host-side type-identity receipt rather
+than merely another library check:
 
 ```sh
 cargo run -p demo-scrying-winit   # cross-platform backend-selection smoke

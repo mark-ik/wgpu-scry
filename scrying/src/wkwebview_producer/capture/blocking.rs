@@ -99,14 +99,11 @@ impl WkWebViewProducer {
         // textures we allocate land on the same device the consumer
         // renders against.
         let metal_device: Retained<ProtocolObject<dyn MTLDevice>> = unsafe {
-            host.device
-                .as_hal::<wgpu::wgc::api::Metal>()
-                .ok_or_else(|| {
-                    WebSurfaceError::Platform("host wgpu device is not on the Metal backend".into())
-                })?
-                .raw_device()
-                .clone()
-        };
+            crate::wgpu_compat::metal_device(&host.device)
+        }
+        .ok_or_else(|| {
+            WebSurfaceError::Platform("host wgpu device is not on the Metal backend".into())
+        })?;
 
         let target_window = self.resolve_target_window(timeout)?;
         // Capture the *full* host window at native pixel

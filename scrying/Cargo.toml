@@ -7,7 +7,29 @@ repository = "https://github.com/merely-made/wgpu-scry"
 description = "Capability-driven system-webview frame adapter — scry into WebView2/WKWebView/WebKitGTK and produce wgpu-importable frames"
 
 [features]
-default = []
+default = ["wgpu-29"]
+# Pick the row matching the host's wgpu. The newest enabled row wins when
+# features unify, so --all-features remains useful.
+wgpu-30 = [
+    "dep:wgpu_30",
+    "dep:wgpu_hal_30",
+    "dep:wgpu_types_30",
+    "grafting/wgpu-30",
+]
+wgpu-29 = [
+    "dep:wgpu_29",
+    "dep:wgpu_hal_29",
+    "dep:wgpu_types_29",
+    "grafting/wgpu-29",
+]
+wgpu-28 = [
+    "dep:wgpu_28",
+    "dep:wgpu_hal_28",
+    "dep:wgpu_types_28",
+    "dep:metal",
+    "dep:foreign-types-shared",
+    "grafting/wgpu-28",
+]
 webkitgtk-fallback = [
     "dep:gdk",
     "dep:glib",
@@ -35,15 +57,12 @@ image = "0.25"
 # in the gamut conversions; no rendering-extras features.
 palette = { version = "0.7", default-features = false, features = ["std"] }
 thiserror = "2.0.17"
-wgpu = { workspace = true, features = ["metal"] }
-wgpu-hal = "29.0"
-# Shared native-texture interop core. scrying delegates its generic shared-texture
-# import (OpenSharedHandle -> wgpu) to grafting instead of duplicating it; scrying's
-# synchronizer (fence / semaphore waits) still wraps the delegated import in
-# import_frame, unchanged. `default-features = false` drops grafting's GL producer
-# path (surfman/glow); `wgpu-29` matches scrying's wgpu so textures share one device.
-grafting = { version = "0.5", default-features = false, features = ["wgpu-29"] }
-
+wgpu_30 = { package = "wgpu", version = "30.0.0", features = ["metal"], optional = true }
+wgpu_hal_30 = { package = "wgpu-hal", version = "30.0.0", optional = true }
+wgpu_29 = { package = "wgpu", version = "29.0.1", features = ["metal"], optional = true }
+wgpu_hal_29 = { package = "wgpu-hal", version = "29.0.1", optional = true }
+wgpu_28 = { package = "wgpu", version = "28.0.0", features = ["metal"], optional = true }
+wgpu_hal_28 = { package = "wgpu-hal", version = "28.0.0", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 # Phase 4a — Vulkan DMABUF import path in `native_frame::dmabuf`.
 # wgpu-hal 29 pulls ash 0.38 transitively; pin to match. libc covers
@@ -52,7 +71,9 @@ grafting = { version = "0.5", default-features = false, features = ["wgpu-29"] }
 # `TextureDescriptor` we build during the import.
 ash = "0.38"
 libc = "0.2"
-wgpu-types = "29.0"
+wgpu_types_30 = { package = "wgpu-types", version = "30.0.0", optional = true }
+wgpu_types_29 = { package = "wgpu-types", version = "29.0.1", optional = true }
+wgpu_types_28 = { package = "wgpu-types", version = "28.0.0", optional = true }
 # WebKitGTK Rust bindings (Tauri-maintained line, links against
 # libwebkitgtk-4.1).
 #
@@ -120,13 +141,12 @@ glib = "0.18"
 pkg-config = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Single objc2 0.6.x line. Default features kept on all of these — slim
-# them once we know exactly what symbols the WKWebView producer + SCK
-# capture pipeline pulls. wgpu-hal 29's `metal::Device::texture_from_raw`
-# takes `Retained<ProtocolObject<dyn MTLTexture>>` directly, so the
-# interop path uses `objc2_metal` rather than the legacy `metal` /
-# `foreign-types-shared` crates. The objc2-* crates cover producer-side
-# WKWebView, ScreenCaptureKit, and IOSurface plumbing.
+# wgpu-hal 28 exposes metal-rs handles; 29/30 expose objc2-metal handles. The
+# public interop API stays objc2-shaped and converts only at the HAL boundary.
+metal = { version = "0.33.0", optional = true }
+foreign-types-shared = { version = "0.3.1", optional = true }
+# The objc2-* crates cover producer-side WKWebView, ScreenCaptureKit, and
+# IOSurface plumbing.
 objc2 = "0.6.3"
 objc2-foundation = "0.3.2"
 objc2-app-kit = "0.3.2"
@@ -150,6 +170,9 @@ block2 = "0.6.2"
 dispatch2 = "0.3.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# Shared native-texture interop core. The Windows DX12 import delegates to
+# grafting; scrying's wgpu-* feature forwards the matching row.
+grafting = { version = "0.5", default-features = false }
 webview2-com = "0.39.1"
 windows-numerics = "0.3"
 windows = { version = "0.62", features = [

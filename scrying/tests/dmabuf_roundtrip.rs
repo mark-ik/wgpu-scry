@@ -43,6 +43,7 @@ use std::os::fd::IntoRawFd;
 
 use ash::vk;
 use dpi::PhysicalSize;
+use scrying::wgpu;
 use scrying::{
     DmaBufImage, DmaBufPlane, HostWgpuContext, ImportOptions, ImportedTexture, NativeFrame,
     SyncMechanism, TextureImporter, WgpuTextureImporter,

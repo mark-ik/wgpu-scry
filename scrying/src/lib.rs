@@ -1,6 +1,50 @@
 #![doc = include_str!("../README.md")]
 
+// Alias the feature-selected wgpu family back to the plain crate names. Public
+// re-exports let hosts name the exact Device/Texture types scrying expects.
+#[cfg(feature = "wgpu-30")]
+pub extern crate wgpu_30 as wgpu;
+#[cfg(feature = "wgpu-30")]
+pub extern crate wgpu_hal_30 as wgpu_hal;
+#[cfg(all(target_os = "linux", feature = "wgpu-30"))]
+extern crate wgpu_types_30 as wgpu_types;
+
+#[cfg(all(feature = "wgpu-29", not(feature = "wgpu-30")))]
+pub extern crate wgpu_29 as wgpu;
+#[cfg(all(feature = "wgpu-29", not(feature = "wgpu-30")))]
+pub extern crate wgpu_hal_29 as wgpu_hal;
+#[cfg(all(target_os = "linux", feature = "wgpu-29", not(feature = "wgpu-30")))]
+extern crate wgpu_types_29 as wgpu_types;
+
+#[cfg(all(
+    feature = "wgpu-28",
+    not(feature = "wgpu-29"),
+    not(feature = "wgpu-30")
+))]
+pub extern crate wgpu_28 as wgpu;
+#[cfg(all(
+    feature = "wgpu-28",
+    not(feature = "wgpu-29"),
+    not(feature = "wgpu-30")
+))]
+pub extern crate wgpu_hal_28 as wgpu_hal;
+#[cfg(all(
+    target_os = "linux",
+    feature = "wgpu-28",
+    not(feature = "wgpu-29"),
+    not(feature = "wgpu-30")
+))]
+extern crate wgpu_types_28 as wgpu_types;
+
+#[cfg(not(any(feature = "wgpu-28", feature = "wgpu-29", feature = "wgpu-30")))]
+compile_error!(
+    "scrying needs one wgpu version feature: enable `wgpu-29` (default), `wgpu-30`, or `wgpu-28`"
+);
+
 pub mod native_frame;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod wgpu_compat;
 
 use dpi::PhysicalSize;
 use thiserror::Error;

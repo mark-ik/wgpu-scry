@@ -409,7 +409,8 @@ pub(super) fn import(
         );
 
         // ---- 5. Wrap as wgpu::Texture ----
-        let wgpu_texture = host.device.create_texture_from_hal::<Vulkan>(
+        let wgpu_texture = crate::wgpu_compat::create_texture_from_hal::<Vulkan>(
+            &host.device,
             hal_texture,
             &wgpu::TextureDescriptor {
                 label: Some("scrying-dmabuf-import"),
@@ -425,6 +426,9 @@ pub(super) fn import(
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
+            // The foreign-queue acquire barrier above leaves this image in
+            // SHADER_READ_ONLY_OPTIMAL, which wgpu represents as RESOURCE.
+            wgpu::TextureUses::RESOURCE,
         );
 
         // ---- 6. Optional: producer-sync semaphore wait ----
@@ -707,10 +711,26 @@ pub fn build_dmabuf_capable_device(
     // extensions vec wgpu-hal built. Only push names that aren't
     // already there — Vulkan rejects duplicates in
     // `vkCreateDevice`.
+    #[cfg(any(feature = "wgpu-29", feature = "wgpu-30"))]
     let hal_open = unsafe {
         hal_adapter.open_with_callback(
             desc.required_features,
             &desc.required_limits,
+            &desc.memory_hints,
+            Some(Box::new(|args| {
+                for &name in REQUIRED {
+                    if !args.extensions.iter().any(|e| *e == name) {
+                        args.extensions.push(name);
+                    }
+                }
+            })),
+        )
+    }
+    .map_err(|e| DmaBufDeviceError::HalOpen(format!("{e:?}")))?;
+    #[cfg(not(any(feature = "wgpu-29", feature = "wgpu-30")))]
+    let hal_open = unsafe {
+        hal_adapter.open_with_callback(
+            desc.required_features,
             &desc.memory_hints,
             Some(Box::new(|args| {
                 for &name in REQUIRED {

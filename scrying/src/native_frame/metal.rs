@@ -14,7 +14,16 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLTexture, MTLTextureType};
+use objc2_metal::MTLTexture;
+#[cfg(any(feature = "wgpu-29", feature = "wgpu-30"))]
+use objc2_metal::MTLTextureType;
+
+#[cfg(all(
+    feature = "wgpu-28",
+    not(feature = "wgpu-29"),
+    not(feature = "wgpu-30")
+))]
+use foreign_types_shared::ForeignType;
 
 use super::{HostWgpuContext, ImportedTexture, InteropBackend, InteropError, MetalTextureRef};
 
@@ -38,38 +47,72 @@ pub(super) fn import(
         let obj_ptr = frame.raw_metal_texture as *mut ProtocolObject<dyn MTLTexture>;
         let retained = Retained::retain(obj_ptr)
             .ok_or_else(|| InteropError::Metal("failed to retain Metal texture".into()))?;
+        #[cfg(all(
+            feature = "wgpu-28",
+            not(feature = "wgpu-29"),
+            not(feature = "wgpu-30")
+        ))]
+        let retained = metal::Texture::from_ptr(Retained::into_raw(retained).cast());
 
+        let copy_size = wgpu::hal::CopyExtent {
+            width: frame.size.width,
+            height: frame.size.height,
+            depth: 1,
+        };
+        #[cfg(feature = "wgpu-30")]
         let hal_texture = wgpu::hal::metal::Device::texture_from_raw(
             retained,
             frame.format,
             MTLTextureType::Type2D,
             1,
             1,
-            wgpu::hal::CopyExtent {
-                width: frame.size.width,
-                height: frame.size.height,
-                depth: 1,
-            },
+            copy_size,
+            None,
+        );
+        #[cfg(all(feature = "wgpu-29", not(feature = "wgpu-30")))]
+        let hal_texture = wgpu::hal::metal::Device::texture_from_raw(
+            retained,
+            frame.format,
+            MTLTextureType::Type2D,
+            1,
+            1,
+            copy_size,
+        );
+        #[cfg(all(
+            feature = "wgpu-28",
+            not(feature = "wgpu-29"),
+            not(feature = "wgpu-30")
+        ))]
+        let hal_texture = wgpu::hal::metal::Device::texture_from_raw(
+            retained,
+            frame.format,
+            metal::MTLTextureType::D2,
+            1,
+            1,
+            copy_size,
         );
 
-        host.device
-            .create_texture_from_hal::<wgpu::wgc::api::Metal>(
-                hal_texture,
-                &wgpu::TextureDescriptor {
-                    label: Some("scrying-metal-texture-ref-import"),
-                    size: wgpu::Extent3d {
-                        width: frame.size.width,
-                        height: frame.size.height,
-                        depth_or_array_layers: 1,
-                    },
-                    format: frame.format,
-                    dimension: wgpu::TextureDimension::D2,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
+        crate::wgpu_compat::create_texture_from_hal::<wgpu::wgc::api::Metal>(
+            &host.device,
+            hal_texture,
+            &wgpu::TextureDescriptor {
+                label: Some("scrying-metal-texture-ref-import"),
+                size: wgpu::Extent3d {
+                    width: frame.size.width,
+                    height: frame.size.height,
+                    depth_or_array_layers: 1,
                 },
-            )
+                format: frame.format,
+                dimension: wgpu::TextureDimension::D2,
+                mip_level_count: 1,
+                sample_count: 1,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+            // Metal has no explicit image layout; this imported frame enters
+            // wgpu for shader reads.
+            wgpu::TextureUses::RESOURCE,
+        )
     };
 
     Ok(ImportedTexture {

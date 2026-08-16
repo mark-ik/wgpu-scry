@@ -1,0 +1,30 @@
+name: wgpu matrix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: ${{ matrix.os }} / ${{ matrix.wgpu }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        wgpu: [wgpu-28, wgpu-29, wgpu-30]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check -p scrying --lib --no-default-features --features ${{ matrix.wgpu }}
+
+  host-wgpu-30:
+    name: Windows wgpu 30 host
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check -p demo-scrying-winit
