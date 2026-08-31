@@ -38,7 +38,7 @@ extern crate wgpu_types_28 as wgpu_types;
 
 #[cfg(not(any(feature = "wgpu-28", feature = "wgpu-29", feature = "wgpu-30")))]
 compile_error!(
-    "scrying needs one wgpu version feature: enable `wgpu-29` (default), `wgpu-30`, or `wgpu-28`"
+    "scrying needs one wgpu version feature: enable `wgpu-30` (default), `wgpu-29`, or `wgpu-28`"
 );
 
 pub mod native_frame;
@@ -104,7 +104,7 @@ pub mod webkit6_producer;
 // cargo feature:
 //   webkit6              → WebKitGTK 6.0 / GTK 4 (newest, libadwaita line)
 //   webkitgtk-fallback   → WebKitGTK 4.1 / GTK 3 (widest installed base, Tauri-shaped)
-//   (neither)            → WPE scaffold (DMABUF / Vulkan; Phase 4)
+//   (neither)            → WPE producer type; `wpe` enables its runtime FFI
 // When both `webkit6` and `webkitgtk-fallback` are on, `webkit6` wins.
 #[cfg(all(target_os = "linux", feature = "webkit6"))]
 pub use webkit6_producer::{

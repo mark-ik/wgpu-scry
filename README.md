@@ -9,10 +9,11 @@ the page.
 Extracted from
 [`wgpu-graft`](https://github.com/merely-made/wgpu-graft) on 2026-05-05.
 
-## Status (2026-08-12)
+## Status (2026-08-30)
 
-`scrying` 0.4.0, working on all five backends; last feature commit
-2026-07-01 (cookie support across all producers).
+`scrying` 0.6.0 is published on crates.io and working across all five
+backends. It carries feature-selected wgpu 28/29/30, defaults to wgpu 30, and
+requires at least wgpu 30.0.1 on that row.
 
 - Frame transports are proven per platform: Windows WebView2 capture into a
   shared D3D11 texture imported by wgpu D3D12 (the reference
@@ -34,21 +35,21 @@ Vulkan DCC correctness are blocked upstream.
 
 ## Use
 
-For wgpu hosts that want a system webview rendered inside their own
-pipeline. Not yet on crates.io; take it as a git dependency:
+For wgpu hosts that want a system webview rendered inside their own pipeline:
 
 ```toml
 [dependencies]
-scrying = { git = "https://github.com/merely-made/wgpu-scry" }
+scrying = "0.6"
 
 # Hosts on an adjacent wgpu major select it explicitly.
-scrying = { git = "https://github.com/merely-made/wgpu-scry", default-features = false, features = ["wgpu-30"] }
+scrying = { version = "0.6", default-features = false, features = ["wgpu-29"] }
 ```
 
-The default wgpu row is 29. `wgpu-28`, `wgpu-29`, and `wgpu-30` are carried;
-disable default features when selecting 28 or 30. On Linux, combine that row
-with one of `webkitgtk-fallback`, `webkit6`, or `wpe` (omitting all three
-selects WPE).
+The default wgpu row is 30. `wgpu-28`, `wgpu-29`, and `wgpu-30` are carried;
+disable default features when selecting 28 or 29. On Linux, combine that row
+with one of `webkitgtk-fallback`, `webkit6`, or `wpe`. Omitting all three keeps
+the WPE producer type available as a compile-only shell; `wpe` enables its
+WPEPlatform FFI and live DMABUF production.
 
 Each backend has a runnable demo probe with flagged assertion modes. The
 cross-platform probe intentionally pins wgpu 30 and selects scrying's

@@ -2,9 +2,9 @@ name: test-mac
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 # Cancel in-flight runs for the same ref when a new commit lands —
 # we only care about the latest state.

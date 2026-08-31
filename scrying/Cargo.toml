@@ -1,10 +1,10 @@
 [package]
 name = "scrying"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/merely-made/wgpu-scry"
-description = "Capability-driven system-webview frame adapter — scry into WebView2/WKWebView/WebKitGTK and produce wgpu-importable frames"
+description = "Capability-driven system-webview frame adapter for WebView2, WKWebView, WebKitGTK, and WPE"
 
 [features]
 default = ["wgpu-30"]
@@ -57,8 +57,8 @@ image = "0.25"
 # in the gamut conversions; no rendering-extras features.
 palette = { version = "0.7", default-features = false, features = ["std"] }
 thiserror = "2.0.17"
-wgpu_30 = { package = "wgpu", version = "30.0.0", features = ["metal"], optional = true }
-wgpu_hal_30 = { package = "wgpu-hal", version = "30.0.0", optional = true }
+wgpu_30 = { package = "wgpu", version = "30.0.1", features = ["metal"], optional = true }
+wgpu_hal_30 = { package = "wgpu-hal", version = "30.0.1", optional = true }
 wgpu_29 = { package = "wgpu", version = "29.0.1", features = ["metal"], optional = true }
 wgpu_hal_29 = { package = "wgpu-hal", version = "29.0.1", optional = true }
 wgpu_28 = { package = "wgpu", version = "28.0.0", features = ["metal"], optional = true }
@@ -71,7 +71,7 @@ wgpu_hal_28 = { package = "wgpu-hal", version = "28.0.0", optional = true }
 # `TextureDescriptor` we build during the import.
 ash = "0.38"
 libc = "0.2"
-wgpu_types_30 = { package = "wgpu-types", version = "30.0.0", optional = true }
+wgpu_types_30 = { package = "wgpu-types", version = "30.0.1", optional = true }
 wgpu_types_29 = { package = "wgpu-types", version = "29.0.1", optional = true }
 wgpu_types_28 = { package = "wgpu-types", version = "28.0.0", optional = true }
 # WebKitGTK Rust bindings (Tauri-maintained line, links against
@@ -172,7 +172,7 @@ dispatch2 = "0.3.0"
 [target.'cfg(target_os = "windows")'.dependencies]
 # Shared native-texture interop core. The Windows DX12 import delegates to
 # grafting; scrying's wgpu-* feature forwards the matching row.
-grafting = { version = "0.5", default-features = false }
+grafting = { version = "0.5.1", default-features = false }
 webview2-com = "0.39.1"
 windows-numerics = "0.3"
 windows = { version = "0.62", features = [

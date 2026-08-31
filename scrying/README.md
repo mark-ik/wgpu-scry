@@ -6,9 +6,9 @@ The name comes from *scrying* — gazing into a reflective surface for visions. 
 
 This crate is the home for system-webview-backed frame production. It is deliberately separate from [`wgpu-native-texture-interop`](https://github.com/merely-made/wgpu-graft) (sibling repo): the native interop crate imports GPU resources, while this adapter owns system-webview probing, fallback selection, and platform-specific frame-source integration.
 
-The crate defaults to wgpu 29 and also carries `wgpu-28` and `wgpu-30`
+The crate defaults to wgpu 30 and also carries `wgpu-28` and `wgpu-29`
 features. Pick the row matching the host, with default features disabled for
-28 or 30. `scrying::wgpu` re-exports the selected version so public device and
+28 or 29. `scrying::wgpu` re-exports the selected version so public device and
 texture types cannot silently come from a different major.
 
 ## Current slice
@@ -19,12 +19,12 @@ The shared contract:
 - `WebSurfaceCapabilities` — platform/backend capability reporting.
 - `WebSurfaceFrame` — imported native frame, CPU RGBA frame, PNG snapshot, or overlay-only state.
 - `WebSurfaceProducer` — producer trait that platform implementations satisfy.
-- `PlatformWebSurfaceProducer` / `PlatformWebSurfaceConfig` — cfg-selected aliases for the current target platform's primary concrete producer and config. Linux selects the WPE scaffold; it reports unsupported capture until the WPE FFI callback bridge and Vulkan DMABUF importer are wired.
+- `PlatformWebSurfaceProducer` / `PlatformWebSurfaceConfig` — cfg-selected aliases for the current target platform's primary concrete producer and config. Linux selects the WPE producer type; the `wpe` feature enables its runtime FFI. Its DMABUF frame shape is hardware-verified, with the RADV/DCC pixel-correctness limitation recorded in the parity matrix.
 - `OverlayOnlyProducer` — conservative fallback when no capture backend is available.
 
 Platform selection is intentionally split:
 
-- **scrying owns backend selection.** Platform modules, concrete producer aliases, and engine dependencies are `cfg(target_os = ...)` gated, so a Windows build selects WebView2, a macOS build selects WKWebView, and a Linux build selects the WPE producer scaffold without compiling the other engine paths. WebKitGTK remains opt-in fallback planning, not the canonical Linux backend.
+- **scrying owns backend selection.** Platform modules, concrete producer aliases, and engine dependencies are `cfg(target_os = ...)` gated, so a Windows build selects WebView2, a macOS build selects WKWebView, and a Linux build selects the WPE type without compiling the other engine paths. Add `wpe` for the live WPEPlatform producer; without it the alias is a compile-only shell. WebKitGTK 4.1 and 6.0 remain opt-in Linux alternatives.
 - **the host owns embedding.** The host still creates the window/event loop, supplies the native parent handle, chooses size/data-dir policy, and forwards native input/lifecycle events. Those responsibilities are application-specific and cannot be guessed reliably inside the library.
 - **runtime capability probing stays layered on top.** `WebSurfaceCapabilities::probe` answers which surface modes are viable for the current GPU/OS/runtime after the target backend has been selected at compile time.
 
@@ -51,9 +51,9 @@ Per-platform producer modules:
 | --- | --- | --- | --- |
 | Windows | [`webview2_composition_producer`] | **Implemented.** Reference implementation; runtime-driven by [`demo-scrying-winit`]. | WebView2 CompositionController → `Windows.UI.Composition.Visual` → `Windows.Graphics.Capture` → shared D3D11 NT-handle texture → `wgpu` D3D12 import. |
 | macOS | [`wkwebview_producer`] | **Implemented.** Runtime-driven by [`demo-mac`]. Slices A–N + the `MetalTextureRef` import path all exercised end-to-end. See [`design_docs/2026-05-07_platform_ceilings.md`](../design_docs/2026-05-07_platform_ceilings.md). | `WKWebView` hosted in NSView → `ScreenCaptureKit` stream bound to the host window → `CMSampleBuffer` → `IOSurfaceRef` → `MTLTexture` (via `MTLDevice::newTextureWithDescriptor:iosurface:plane:`) → `wgpu` Metal import (via `wgpu::hal::metal::Device::texture_from_raw`). |
-| Linux | [`wpe_producer`], [`webkitgtk_producer`] fallback | **Scaffold.** WPE is selected as the primary Linux producer and carries the DMABUF frame contract; WebKitGTK is an opt-in fallback/planning scaffold. | `WPEWebView` + `WPEViewBackendDMABuf` → DMABUF + `VkSemaphore` → `wgpu` Vulkan import. The WPE FFI callback bridge and Vulkan importer still need a Linux implementation pass; WebKitGTK + wlroots `zwlr_screencopy_manager_v1` remains a possible coarser fallback. |
+| Linux | [`wpe_producer`], [`webkitgtk_producer`], [`webkit6_producer`] | **Implemented behind backend features.** `wpe` enables the headless WPEPlatform producer; its DMABUF shape is hardware-verified on AMD. WebKitGTK 4.1 and 6.0 are CPU-snapshot alternatives. | `WPEWebView` + `WPEViewBackendDMABuf` → `DmaBufImage` → host-side wgpu Vulkan import. RADV/DCC pixel correctness remains limited as recorded in the parity matrix. |
 
-Both implemented producers cover the producer/consumer split, lazy capture standup, lifecycle teardown, and platform-appropriate cross-API sync (D3D11 keyed-mutex on Windows; implicit IOSurface coherence + `MTLSharedEvent` scaffolding on macOS).
+The Windows and macOS producers cover the producer/consumer split, lazy capture standup, lifecycle teardown, and platform-appropriate cross-API sync (D3D11 keyed-mutex on Windows; implicit IOSurface coherence + `MTLSharedEvent` scaffolding on macOS). The WPE producer exposes owned DMABUF frame metadata and duplicates its fds before releasing the WPE buffer back to the producer pool.
 
 ## Windows producer details
 
@@ -88,7 +88,7 @@ The lower-level building blocks live in [`windows_capture`]:
 
 ## Fallbacks
 
-`NativeChildOverlay` remains the normal native-overlay fallback on every platform. macOS supports `CpuSnapshot` end-to-end via `WKWebView.takeSnapshot` (synchronous via `capture_cpu_snapshot`, non-blocking via `request_snapshot` / `poll_snapshot`); the Linux skeleton does not yet (`webkit_web_view_get_snapshot` would work but no consumer yet wants it).
+`NativeChildOverlay` remains the normal native-overlay fallback on every platform. macOS supports `CpuSnapshot` end-to-end via `WKWebView.takeSnapshot` (synchronous via `capture_cpu_snapshot`, non-blocking via `request_snapshot` / `poll_snapshot`). WPE does not provide that tier; the WebKitGTK 4.1 and 6.0 alternatives do.
 
 `CpuSnapshot` is useful for diagnostics, thumbnails, and low-frequency preview paths, but it is not the target for interactive composited web surfaces.
 

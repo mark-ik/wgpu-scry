@@ -22,7 +22,7 @@ version = "0.1.0"
 # `wgpu.workspace = true` AND `scrying` with default features, so a mismatch
 # puts two wgpu majors in one demo graph.
 [workspace.dependencies]
-wgpu = "30"
+wgpu = "30.0.1"
 winit = "0.30.13"
 raw-window-handle = "0.6.2"
 dpi = "0.1.2"

@@ -2,9 +2,9 @@ name: test-linux
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 # Cancel in-flight runs for the same ref when a new commit lands —
 # we only care about the latest state.
@@ -63,8 +63,8 @@ jobs:
         run: cargo test -p scrying --lib
 
       # Verify both feature configurations build cleanly. Default features
-      # use the WPE alias scaffold; the webkitgtk-fallback feature pulls in
-      # the real producer.
+      # use the WPE producer; the webkitgtk-fallback feature selects the
+      # WebKitGTK 4.1 alternative.
       - name: cargo check (default features)
         run: cargo check -p scrying -p demo-scrying-winit
 
