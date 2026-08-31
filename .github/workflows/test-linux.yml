@@ -12,6 +12,9 @@ concurrency:
   group: test-linux-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   demo-linux-test-suite:
     name: demo-linux test suite (${{ matrix.os }})
@@ -60,19 +63,19 @@ jobs:
 
       # Library + helpers unit tests. No display needed.
       - name: cargo test (scrying lib)
-        run: cargo test -p scrying --lib
+        run: cargo test --locked -p scrying --lib
 
       # Verify both feature configurations build cleanly. Default features
       # use the WPE producer; the webkitgtk-fallback feature selects the
       # WebKitGTK 4.1 alternative.
       - name: cargo check (default features)
-        run: cargo check -p scrying -p demo-scrying-winit
+        run: cargo check --locked -p scrying -p demo-scrying-winit
 
       - name: cargo check (webkitgtk-fallback feature)
-        run: cargo check -p scrying --features webkitgtk-fallback
+        run: cargo check --locked -p scrying --features webkitgtk-fallback
 
       - name: cargo build demo-linux
-        run: cargo build -p demo-linux
+        run: cargo build --locked -p demo-linux
 
       # demo-linux integration suite under Xvfb. GH runners are
       # headless; xvfb-run provides a virtual X server so GDK +
@@ -81,3 +84,38 @@ jobs:
       # forces the CPU snapshot path so no real GPU is required.
       - name: xvfb-run bash scripts/test-linux.sh
         run: xvfb-run -a bash scripts/test-linux.sh
+
+  wpe-fedora-build:
+    name: WPE producer and demo (Fedora 44)
+    runs-on: ubuntu-latest
+    container: fedora:44
+    env:
+      RUSTFLAGS: -D warnings
+
+    steps:
+      - name: Install build and WPE packages
+        run: |
+          dnf install -y dnf-plugins-core git curl gcc gcc-c++ \
+            pkgconf-pkg-config mesa-libgbm-devel libdrm-devel \
+            vulkan-loader-devel
+          dnf copr enable -y philn/wpewebkit
+          dnf install -y wpewebkit-devel libwpe-devel wpebackend-fdo-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check WPE producer and demo
+        run: |
+          cargo check --locked -p scrying --features wpe
+          cargo check --locked -p demo-wpe
+
+      # Hosted containers do not expose the AMD/Intel render node and headed
+      # Wayland session needed to execute this gate. Building the hard test
+      # keeps its WPE, GBM, Vulkan, and Graft seams under required CI; the
+      # physical RADV pixel receipt is recorded in docs/wpe-deployment.md.
+      - name: Build WPE-to-Vulkan pixel gate
+        run: >-
+          cargo test --locked -p scrying --features wpe
+          --test wpe_to_vulkan_roundtrip --no-run

@@ -13,19 +13,16 @@ default = ["wgpu-30"]
 wgpu-30 = [
     "dep:wgpu_30",
     "dep:wgpu_hal_30",
-    "dep:wgpu_types_30",
     "grafting/wgpu-30",
 ]
 wgpu-29 = [
     "dep:wgpu_29",
     "dep:wgpu_hal_29",
-    "dep:wgpu_types_29",
     "grafting/wgpu-29",
 ]
 wgpu-28 = [
     "dep:wgpu_28",
     "dep:wgpu_hal_28",
-    "dep:wgpu_types_28",
     "dep:metal",
     "dep:foreign-types-shared",
     "grafting/wgpu-28",
@@ -57,6 +54,7 @@ image = "0.25"
 # in the gamut conversions; no rendering-extras features.
 palette = { version = "0.7", default-features = false, features = ["std"] }
 thiserror = "2.0.17"
+grafting = { version = "0.5.1", git = "https://github.com/merely-made/wgpu-graft.git", rev = "842b8fdeeffb701b76ba4b320c435968ee1b3f4a", default-features = false }
 wgpu_30 = { package = "wgpu", version = "30.0.1", features = ["metal"], optional = true }
 wgpu_hal_30 = { package = "wgpu-hal", version = "30.0.1", optional = true }
 wgpu_29 = { package = "wgpu", version = "29.0.1", features = ["metal"], optional = true }
@@ -67,13 +65,8 @@ wgpu_hal_28 = { package = "wgpu-hal", version = "28.0.0", optional = true }
 # Phase 4a — Vulkan DMABUF import path in `native_frame::dmabuf`.
 # wgpu-hal 29 pulls ash 0.38 transitively; pin to match. libc covers
 # the small POSIX-fd plumbing the import needs (no other Linux deps).
-# wgpu-types is needed for `wgt::TextureUses` on the wgpu-hal
-# `TextureDescriptor` we build during the import.
 ash = "0.38"
 libc = "0.2"
-wgpu_types_30 = { package = "wgpu-types", version = "30.0.1", optional = true }
-wgpu_types_29 = { package = "wgpu-types", version = "29.0.1", optional = true }
-wgpu_types_28 = { package = "wgpu-types", version = "28.0.0", optional = true }
 # WebKitGTK Rust bindings (Tauri-maintained line, links against
 # libwebkitgtk-4.1).
 #
@@ -170,9 +163,6 @@ block2 = "0.6.2"
 dispatch2 = "0.3.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Shared native-texture interop core. The Windows DX12 import delegates to
-# grafting; scrying's wgpu-* feature forwards the matching row.
-grafting = { version = "0.5.1", default-features = false }
 webview2-com = "0.39.1"
 windows-numerics = "0.3"
 windows = { version = "0.62", features = [

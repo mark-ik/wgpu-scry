@@ -379,9 +379,9 @@ fn create_and_signal_exportable_semaphore(
     use wgpu::wgc::api::Vulkan;
 
     unsafe {
-        let hal_device = device
-            .as_hal::<Vulkan>()
-            .ok_or_else(|| SemaphoreSetupError::Fail("device.as_hal::<Vulkan>() returned None".into()))?;
+        let hal_device = device.as_hal::<Vulkan>().ok_or_else(|| {
+            SemaphoreSetupError::Fail("device.as_hal::<Vulkan>() returned None".into())
+        })?;
         let raw_device: &ash::Device = hal_device.raw_device();
 
         // Walk wgpu-hal's InstanceShared to reach the ash::Instance
@@ -391,8 +391,7 @@ fn create_and_signal_exportable_semaphore(
         // 1.2+ (a NULL instance returns null for everything except
         // the four global commands). Bypassing wgpu-hal's instance
         // is what the previous ash::Entry::load() attempt got wrong.
-        let ash_instance: &ash::Instance =
-            hal_device.shared_instance().raw_instance();
+        let ash_instance: &ash::Instance = hal_device.shared_instance().raw_instance();
 
         let raw_get_fd =
             ash_instance.get_device_proc_addr(raw_device.handle(), c"vkGetSemaphoreFdKHR".as_ptr());
@@ -410,12 +409,14 @@ fn create_and_signal_exportable_semaphore(
         let mut export_info = vk::ExportSemaphoreCreateInfo::default()
             .handle_types(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD);
         let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut export_info);
-        let vk_semaphore = raw_device.create_semaphore(&create_info, None).map_err(|e| {
-            SemaphoreSetupError::Skip(format!(
-                "vkCreateSemaphore(exportable): {e} — likely the device wasn't \
+        let vk_semaphore = raw_device
+            .create_semaphore(&create_info, None)
+            .map_err(|e| {
+                SemaphoreSetupError::Skip(format!(
+                    "vkCreateSemaphore(exportable): {e} — likely the device wasn't \
                  created with VK_KHR_external_semaphore[_fd] enabled"
-            ))
-        })?;
+                ))
+            })?;
 
         // Signal-only submit.
         let queue_guard = queue.as_hal::<Vulkan>().ok_or_else(|| {
@@ -526,6 +527,11 @@ fn read_back_texture(
         .expect("map_async sender dropped")
         .expect("map_async failed");
 
+    #[cfg(feature = "wgpu-30")]
+    let mapped = buffer_slice
+        .get_mapped_range()
+        .expect("readback buffer map range");
+    #[cfg(not(feature = "wgpu-30"))]
     let mapped = buffer_slice.get_mapped_range();
     let mut bytes = Vec::with_capacity((WIDTH as usize) * (HEIGHT as usize) * 4);
     for row in 0..HEIGHT as usize {
@@ -592,6 +598,8 @@ fn make_vulkan_host() -> Option<(wgpu::Device, wgpu::Queue, HostWgpuContext)> {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
+        #[cfg(feature = "wgpu-30")]
+        apply_limit_buckets: false,
     }))
     .ok()?;
 

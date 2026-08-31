@@ -46,8 +46,7 @@ Demo flag coverage in [`README.md`](../README.md) is what makes a row
 
 [^win-frame]: WebView2 composition-controller → WinComp visual →
 `Windows.Graphics.Capture::CreateFromVisual` → `Bgra8Unorm` D3D11
-texture, bridged into the host as a shared NT handle for
-`wgpu-native-texture-interop` import.
+texture, bridged into the host as a shared NT handle for Graft import.
 
 [^mac-frame]: WKWebView ships *two* frame transports: a CPU
 `takeSnapshot:` path (one-shot, >50ms latency, `CpuSnapshot` tier) and
@@ -56,19 +55,16 @@ composited frames (`ImportedTexture` tier). The SCK path needs the
 Screen Recording privacy permission. See
 [`wkwebview_producer/mod.rs`](../scrying/src/wkwebview_producer/mod.rs).
 
-[^wpe-dcc]: WPE delivers DMABUF frames correctly in *shape* (size,
-format, plane layout verified on real WPE-on-AMD). Pixel-correctness
-through the wgpu Vulkan importer is currently degraded on RADV with
-DCC-compressed RGBA: wgpu 29.0.3's `create_texture_from_hal` tracks
-every external texture as `UNDEFINED` regardless of imported state, so
-wgpu's first-use barrier can discard contents under the Vulkan spec's
-"transition from UNDEFINED may discard" rule. The producer already
-emits a spec-correct foreign-queue acquire barrier; it stays dormant
-until wgpu lands a `texture_from_raw` initial-state API.
-See [`docs/wpe-deployment.md#wgpu-vulkan-pixel-correctness-note`](wpe-deployment.md#wgpu-vulkan-pixel-correctness-note).
+[^wpe-dcc]: The wgpu 30 path is pixel-verified on AMD Renoir/RADV with
+WPEWebKit 2.52.5 and an explicit DCC modifier. The hard integration test
+sampled 4,096 center pixels through a host-owned render target; every pixel
+was within ±8 of BGRA `[255, 144, 30, 255]`. Graft owns the foreign-queue
+acquire and registers the established `RESOURCE` state at the wgpu HAL
+boundary. See the full command and receipt in
+[`docs/wpe-deployment.md#wgpu-vulkan-pixel-correctness-receipt`](wpe-deployment.md#wgpu-vulkan-pixel-correctness-receipt).
 
 [^wpe-resize]: WPE's headless `WPEToplevelHeadless::resize` vfunc is
-unimplemented in WPEWebKit 2.52.3. `wpe_toplevel_resize` returns TRUE
+unimplemented in WPEWebKit 2.52.5. `wpe_toplevel_resize` returns TRUE
 but dimensions stay at the construction-time defaults (1024×768). Pick
 the final size at `WpeProducer::new` and do not resize at runtime.
 Honored correctly on hosted (non-headless) WPE targets and on

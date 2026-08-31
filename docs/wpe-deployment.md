@@ -13,20 +13,19 @@ constrained at install time.
 
 ## Prerequisites
 
-### WPEWebKit 2.52.3
+### WPEWebKit 2.52.5
 
-The producer is pinned to **WPEWebKit 2.52.3** (matches the
-`webkit6_producer/` baseline). `build.rs` enforces `wpe-webkit-2.0 ≥
-2.52` via `pkg-config` and will fail the build with a clear error if
-the package is missing.
+The current headed receipt uses **WPEWebKit 2.52.5**. `build.rs` accepts the
+2.52 stable line by enforcing `wpe-webkit-2.0 >= 2.52` via `pkg-config` and
+fails the build with a clear error if the package is missing.
 
 Companion versions used in development:
 
-- libwpe 1.16.2
+- libwpe 1.16.3
 - wpebackend-fdo 1.16.1 (used by upstream WebKit; the producer itself
   is built on the *new* WPEPlatform API, not the legacy fdo path)
 
-### Fedora 44: install via the philn COPR (with URL workaround)
+### Fedora 44: install via the philn COPR
 
 Fedora 44 does not ship WPE. The canonical source is the
 [`philn/wpewebkit`](https://copr.fedorainfracloud.org/coprs/philn/wpewebkit/)
@@ -39,23 +38,11 @@ Enable the COPR:
 sudo dnf copr enable philn/wpewebkit
 ```
 
-**Gotcha (verified 2026-05-20):** the COPR's F44 repodata has pruned
-the `wpewebkit` engine build (the latest engine RPM was built against
-F42 only). `sudo dnf install wpewebkit` therefore finds nothing.
-The RPMs still exist on the COPR results server; install them by
-direct URL:
+As of 2026-08-31 the Fedora 44 repository carries the complete 2.52.5 engine
+and development package set, so the old direct-RPM URL workaround is gone:
 
 ```sh
-sudo dnf install -y \
-  https://download.copr.fedorainfracloud.org/results/philn/wpewebkit/fedora-44-x86_64/10341906-wpewebkit/wpewebkit-2.52.3-1.fc44.x86_64.rpm \
-  https://download.copr.fedorainfracloud.org/results/philn/wpewebkit/fedora-44-x86_64/10341906-wpewebkit/wpewebkit-devel-2.52.3-1.fc44.x86_64.rpm
-```
-
-The companion `libwpe` + `wpebackend-fdo` devel packages come from the
-enabled COPR repo as usual:
-
-```sh
-sudo dnf install -y libwpe-devel wpebackend-fdo-devel
+sudo dnf install -y wpewebkit-devel libwpe-devel wpebackend-fdo-devel
 ```
 
 There is no `cog` build for F44 in the COPR. For an out-of-band smoke
@@ -194,11 +181,11 @@ WebSurfaceFrame::Native(NativeFrame::DmaBufImage(DmaBufImage {
 }))
 ```
 
-The host is responsible for importing the DMABUF — via scrying's
-Phase 4a Vulkan importer (`native_frame::dmabuf::import_dmabuf_image`)
-or directly via libgbm / libdrm / EGL_EXT_image_dma_buf_import.
-`demo-wpe` shows the discipline of inspecting + releasing without
-importing; production consumers will instead hand the frame to wgpu.
+The host imports the DMABUF through `WgpuTextureImporter`. Scry applies WPE's
+modifier and semaphore policy, then delegates the low-level external-memory
+boundary to `grafting::vulkan_dmabuf::import_dmabuf`. `demo-wpe` shows the
+discipline of inspecting and releasing without importing; production
+consumers hand the frame to the importer.
 
 ### Plane-fd ownership
 
@@ -207,11 +194,11 @@ are *owned* file descriptors. Ownership transfers with the frame the
 moment `acquire_frame` returns it. `DmaBufImage` has no `Drop`
 implementation — closing fds is the consumer's responsibility:
 
-- If you import the frame via `native_frame::dmabuf::import` (or any
-  Vulkan `VK_KHR_external_memory_fd` path), ownership of
-  `planes[0].fd` transfers to Vulkan on `vkAllocateMemory` success.
-  The importer closes the remaining dup'd plane fds itself; the
-  semaphore fd transfers to Vulkan on `vkImportSemaphoreFdKHR`.
+- If you use `WgpuTextureImporter`, Scry first owns the semaphore wait and
+  then hands every plane fd to Graft. Graft closes all descriptors on
+  validation and Vulkan error paths. On `vkAllocateMemory` success Vulkan
+  owns the first fd and Graft closes the redundant same-buffer plane fds; a
+  semaphore fd likewise transfers only after successful Vulkan import.
 - If you do not import the frame, the consumer must `close(2)` every
   plane fd and the semaphore fd before dropping the frame. See
   `close_frame_fds_if_dmabuf` in `demo-wpe/src/main.rs` for the
@@ -231,7 +218,7 @@ would on a hosted display.
 
 ### Toplevel resize is a no-op
 
-WPE 2.52.3's `WPEToplevelHeadless` class has an unimplemented `resize`
+WPE 2.52.5's `WPEToplevelHeadless` class has an unimplemented `resize`
 vfunc. `wpe_toplevel_resize` returns `TRUE` (suggesting success), but
 the underlying dimensions stay at the construction-time defaults
 (1024×768). `WpeProducer::resize` calls `wpe_view_resized` after the
@@ -319,49 +306,38 @@ should use the `window.chrome.webview` surface. Page code that wants
 the WPE-native escape hatch can call
 `window.webkit.messageHandlers.scry.postMessage(...)` directly.
 
-## wgpu Vulkan pixel-correctness note
+## wgpu Vulkan pixel-correctness receipt
 
-There is a known wgpu 29.0.3 limitation that affects DMABUF imports on
-some drivers. The `native_frame::dmabuf::import` path is *built*
-correctly per the Vulkan spec, but pixel correctness on RADV with
-DCC-compressed RGBA buffers is currently degraded.
+The wgpu 30 WPE path is a hard pixel gate. Graft imports the explicit DRM
+modifier, intersects the image and fd memory-type masks, acquires the image
+from `VK_QUEUE_FAMILY_FOREIGN_EXT`, and registers the resulting shader-readable
+`RESOURCE` state at wgpu's HAL boundary.
 
-From `scrying/src/native_frame/dmabuf.rs` (verbatim):
+Headed receipt from 2026-08-31:
 
-> Per the Vulkan spec for VK_EXT_image_drm_format_modifier /
-> external-handle-type imports, the imported VkImage's contents are
-> owned by `VK_QUEUE_FAMILY_FOREIGN_EXT` (the producer — Mesa-RADV's
-> compositor / WPE). Without an explicit ownership acquire to *our*
-> queue family, wgpu's first-use layout transition (UNDEFINED →
-> whatever) is allowed to discard the producer's content per the
-> "transition from UNDEFINED may discard" rule, and RADV strictly
-> enforces this — the imported texture samples as all-zero.
+- Fedora 44, AMD Renoir/RADV, WPEWebKit 2.52.5, wgpu 30.0.1.
+- WPE exported 1024×768 `XR24`, explicit AMD DCC modifier
+  `0x020000044051ba01`, with color and auxiliary planes sharing one kernel
+  DMABUF.
+- The test discarded WPE's transparent startup buffer, forced the content
+  repaint, sampled the imported texture through a host-owned 64×64 target,
+  and required all 4,096 pixels to be within ±8 of BGRA
+  `[255, 144, 30, 255]`.
+- Result: 4,096/4,096 pixels passed.
 
-The importer emits a spec-correct foreign-queue acquire barrier
-(`UNDEFINED → SHADER_READ_ONLY_OPTIMAL`, `src=FOREIGN_EXT`,
-`dst=our_family`) before wgpu's first-use barrier runs. The catch is
-that wgpu 29.0.3's `create_texture_from_hal` tracks every external
-texture as `TextureUses::UNINITIALIZED` → `vk::ImageLayout::UNDEFINED`
-regardless of what state we left the image in. wgpu's first-use
-barrier therefore transitions from `UNDEFINED` again, and the spec
-allows discarding content on that transition.
+```sh
+export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+cargo test -p scrying --features wpe \
+  --test wpe_to_vulkan_roundtrip -- \
+  --ignored --nocapture --test-threads=1
+```
 
-Practical impact:
-
-- gbm-linear DMABUFs (the `dmabuf_roundtrip` test) read back
-  correctly: linear-tiled transitions are no-ops on most drivers, so
-  the discard-allowance never bites.
-- WPE-rendered AMD-tiled DCC RGBA DMABUFs read back as all-zero on
-  RADV. Import *shape* (size, format, dimensions, plane layout) is
-  verified correct on real WPE-on-AMD; pixel correctness is not.
-- macOS Metal and Windows D3D12 sidestep this — their resource models
-  preserve contents on import.
-
-The `wpe_to_vulkan_roundtrip` integration test runs in
-diagnostic-only mode: it logs observed center-pixel BGRA without
-asserting, and will flip to assertion mode the moment wgpu lands an
-initial-state API on `texture_from_raw`. The fix is upstream-blocked,
-not in scrying.
+The wgpu 28 and 29 rows remain compile-compatible for other Scry backends, but
+the WPE DMABUF capability probe does not claim this content-preserving foreign
+import path on those rows. Hosted Fedora CI builds the producer, demo, and hard
+test binary. Execution remains a headed physical-GPU gate because hosted
+containers do not expose the required render node and Wayland session.
 
 ## Troubleshooting
 
@@ -398,7 +374,8 @@ Check:
   If not, use the direct-URL install above — the standard `dnf
   install wpewebkit-devel` will not find the F44 build.
 - `PKG_CONFIG_PATH` is not blocking discovery (`pkg-config --modversion
-  wpe-webkit-2.0` should print `2.52.3`).
+  wpe-webkit-2.0` should print a 2.52.x version; the current receipt is
+  `2.52.5`).
 
 ### Build pulls in incompatible glib versions
 

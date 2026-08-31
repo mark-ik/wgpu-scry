@@ -472,7 +472,7 @@ impl WebSurfaceProducer for WpeProducer {
         #[cfg(feature = "wpe")]
         {
             // `load_html` arms the nav state internally — no double-arm here.
-            self.load_html(html, None);
+            WpeProducer::load_html(self, html, None);
             self.wait_for_load(timeout)
         }
         #[cfg(not(feature = "wpe"))]

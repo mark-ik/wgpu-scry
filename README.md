@@ -9,7 +9,7 @@ the page.
 Extracted from
 [`wgpu-graft`](https://github.com/merely-made/wgpu-graft) on 2026-05-05.
 
-## Status (2026-08-30)
+## Status (2026-08-31)
 
 `scrying` 0.6.0 is published on crates.io and working across all five
 backends. It carries feature-selected wgpu 28/29/30, defaults to wgpu 30, and
@@ -24,14 +24,16 @@ requires at least wgpu 30.0.1 on that row.
   input, JS messaging, cookies, custom schemes, downloads, profiles,
   popups, find, and PDF. Per-backend state and caveats live in
   [`docs/parity-matrix.md`](docs/parity-matrix.md).
-- Since 2026-06-28 the Windows DX12 shared-texture import delegates to the
-  sibling `grafting` crate; the wgpu-* family now shares that interop core.
-- CI runs the macOS suite and the WebKitGTK 4.1 Linux suite on every push.
+- DX12, Metal, and Vulkan/DMABUF imports delegate to the sibling `grafting`
+  crate at immutable revision `842b8fd`; Scry keeps webview and sync policy.
+- CI runs the macOS suite, the WebKitGTK 4.1 Linux suite, and a required Fedora
+  44 WPE producer/demo build on every push.
 
-Per the newest backlog (2026-06-28), open items are a native GTK4 input path
-for webkit6 (current input is JS-synthesized), crash recovery for
-webkit6/WPE, and IME observability parity; webkit6 zero-copy import and WPE
-Vulkan DCC correctness are blocked upstream.
+Open items are a native GTK4 input path for webkit6 (current input is
+JS-synthesized), crash recovery for webkit6/WPE, IME observability parity, and
+webkit6 zero-copy import. WPE Vulkan DCC sampling is now a hard green gate on
+AMD Renoir/RADV; the headed hardware command and receipt are documented in
+[`docs/wpe-deployment.md`](docs/wpe-deployment.md#wgpu-vulkan-pixel-correctness-receipt).
 
 ## Use
 

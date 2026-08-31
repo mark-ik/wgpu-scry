@@ -266,7 +266,6 @@ unsafe extern "C" {
     // signal closure. `jsc_value_to_string` returns a heap-allocated C string
     // the caller must release with `g_free`.
     pub fn jsc_value_to_string(value: *mut JSCValue) -> *mut c_char;
-    pub fn jsc_value_is_string(value: *mut JSCValue) -> c_int; // gboolean
 
     pub fn webkit_web_view_evaluate_javascript(
         web_view: *mut WebKitWebView,

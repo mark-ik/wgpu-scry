@@ -12,6 +12,9 @@ concurrency:
   group: test-mac-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   demo-mac-test-suite:
     name: demo-mac test suite (${{ matrix.os }})
@@ -47,13 +50,13 @@ jobs:
 
       # Library + helpers unit tests. Doesn't need a display.
       - name: cargo test (scrying lib)
-        run: cargo test -p scrying --lib
+        run: cargo test --locked -p scrying --lib
 
       # Build demo-mac once. test-mac.sh also runs `cargo build`
       # internally but doing it as its own step gives clearer
       # build-time diagnostics if compilation breaks.
       - name: cargo build demo-mac
-        run: cargo build -p demo-mac
+        run: cargo build --locked -p demo-mac
 
       # The integration suite. Each --*-test mode is headless
       # (with_visible(false) + NSApplicationActivationPolicyProhibited),

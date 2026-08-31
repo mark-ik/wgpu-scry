@@ -6,15 +6,11 @@
 pub extern crate wgpu_30 as wgpu;
 #[cfg(feature = "wgpu-30")]
 pub extern crate wgpu_hal_30 as wgpu_hal;
-#[cfg(all(target_os = "linux", feature = "wgpu-30"))]
-extern crate wgpu_types_30 as wgpu_types;
 
 #[cfg(all(feature = "wgpu-29", not(feature = "wgpu-30")))]
 pub extern crate wgpu_29 as wgpu;
 #[cfg(all(feature = "wgpu-29", not(feature = "wgpu-30")))]
 pub extern crate wgpu_hal_29 as wgpu_hal;
-#[cfg(all(target_os = "linux", feature = "wgpu-29", not(feature = "wgpu-30")))]
-extern crate wgpu_types_29 as wgpu_types;
 
 #[cfg(all(
     feature = "wgpu-28",
@@ -28,13 +24,6 @@ pub extern crate wgpu_28 as wgpu;
     not(feature = "wgpu-30")
 ))]
 pub extern crate wgpu_hal_28 as wgpu_hal;
-#[cfg(all(
-    target_os = "linux",
-    feature = "wgpu-28",
-    not(feature = "wgpu-29"),
-    not(feature = "wgpu-30")
-))]
-extern crate wgpu_types_28 as wgpu_types;
 
 #[cfg(not(any(feature = "wgpu-28", feature = "wgpu-29", feature = "wgpu-30")))]
 compile_error!(
@@ -43,7 +32,7 @@ compile_error!(
 
 pub mod native_frame;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 mod wgpu_compat;
 
 use dpi::PhysicalSize;
@@ -135,7 +124,7 @@ pub use wpe_producer::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WebSurfaceMode {
-    /// The adapter can emit a native GPU frame importable by `wgpu-native-texture-interop`.
+    /// The adapter can emit a native GPU frame importable through Graft.
     ImportedTexture,
     /// The webview must remain a platform child window/visual overlay.
     NativeChildOverlay,

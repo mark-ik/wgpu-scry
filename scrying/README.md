@@ -4,7 +4,7 @@ Capability-driven system-webview adapter — scry into WebView2/WKWebView/WPE/We
 
 The name comes from *scrying* — gazing into a reflective surface for visions. The webview is the surface; the captured frame is the vision; this crate is the lens.
 
-This crate is the home for system-webview-backed frame production. It is deliberately separate from [`wgpu-native-texture-interop`](https://github.com/merely-made/wgpu-graft) (sibling repo): the native interop crate imports GPU resources, while this adapter owns system-webview probing, fallback selection, and platform-specific frame-source integration.
+This crate is the home for system-webview-backed frame production. It is deliberately separate from [`grafting`](https://github.com/merely-made/wgpu-graft) (sibling repo): Graft imports native GPU resources, while this adapter owns system-webview probing, fallback selection, synchronization policy, and platform-specific frame-source integration.
 
 The crate defaults to wgpu 30 and also carries `wgpu-28` and `wgpu-29`
 features. Pick the row matching the host, with default features disabled for
@@ -19,7 +19,7 @@ The shared contract:
 - `WebSurfaceCapabilities` — platform/backend capability reporting.
 - `WebSurfaceFrame` — imported native frame, CPU RGBA frame, PNG snapshot, or overlay-only state.
 - `WebSurfaceProducer` — producer trait that platform implementations satisfy.
-- `PlatformWebSurfaceProducer` / `PlatformWebSurfaceConfig` — cfg-selected aliases for the current target platform's primary concrete producer and config. Linux selects the WPE producer type; the `wpe` feature enables its runtime FFI. Its DMABUF frame shape is hardware-verified, with the RADV/DCC pixel-correctness limitation recorded in the parity matrix.
+- `PlatformWebSurfaceProducer` / `PlatformWebSurfaceConfig` — cfg-selected aliases for the current target platform's primary concrete producer and config. Linux selects the WPE producer type; the `wpe` feature enables its runtime FFI. Its shared-fd DCC DMABUF path is pixel-verified on AMD Renoir/RADV.
 - `OverlayOnlyProducer` — conservative fallback when no capture backend is available.
 
 Platform selection is intentionally split:
@@ -51,7 +51,7 @@ Per-platform producer modules:
 | --- | --- | --- | --- |
 | Windows | [`webview2_composition_producer`] | **Implemented.** Reference implementation; runtime-driven by [`demo-scrying-winit`]. | WebView2 CompositionController → `Windows.UI.Composition.Visual` → `Windows.Graphics.Capture` → shared D3D11 NT-handle texture → `wgpu` D3D12 import. |
 | macOS | [`wkwebview_producer`] | **Implemented.** Runtime-driven by [`demo-mac`]. Slices A–N + the `MetalTextureRef` import path all exercised end-to-end. See [`design_docs/2026-05-07_platform_ceilings.md`](../design_docs/2026-05-07_platform_ceilings.md). | `WKWebView` hosted in NSView → `ScreenCaptureKit` stream bound to the host window → `CMSampleBuffer` → `IOSurfaceRef` → `MTLTexture` (via `MTLDevice::newTextureWithDescriptor:iosurface:plane:`) → `wgpu` Metal import (via `wgpu::hal::metal::Device::texture_from_raw`). |
-| Linux | [`wpe_producer`], [`webkitgtk_producer`], [`webkit6_producer`] | **Implemented behind backend features.** `wpe` enables the headless WPEPlatform producer; its DMABUF shape is hardware-verified on AMD. WebKitGTK 4.1 and 6.0 are CPU-snapshot alternatives. | `WPEWebView` + `WPEViewBackendDMABuf` → `DmaBufImage` → host-side wgpu Vulkan import. RADV/DCC pixel correctness remains limited as recorded in the parity matrix. |
+| Linux | [`wpe_producer`], [`webkitgtk_producer`], [`webkit6_producer`] | **Implemented behind backend features.** `wpe` enables the headless WPEPlatform producer; its wgpu 30 DMABUF path is pixel-verified on AMD Renoir/RADV. WebKitGTK 4.1 and 6.0 are CPU-snapshot alternatives. | `WPEWebView` + `WPEViewBackendDMABuf` → `DmaBufImage` → Graft's host-side Vulkan import. |
 
 The Windows and macOS producers cover the producer/consumer split, lazy capture standup, lifecycle teardown, and platform-appropriate cross-API sync (D3D11 keyed-mutex on Windows; implicit IOSurface coherence + `MTLSharedEvent` scaffolding on macOS). The WPE producer exposes owned DMABUF frame metadata and duplicates its fds before releasing the WPE buffer back to the producer pool.
 
@@ -118,7 +118,7 @@ Browser-class additions on top of `WebSurfaceProducer`:
 
 Key cross-API GPU-sync notes:
 
-- The `MetalTextureRef` import path is the analog of the Windows D3D12 shared-handle path — it takes a raw `MTLTexture *` and wraps it as a `wgpu::Texture` via `wgpu::hal::metal::Device::texture_from_raw` (whose API drifted in wgpu 29 to take `Retained<ProtocolObject<dyn MTLTexture>>` directly, dropping the `metal` crate).
+- The `MetalTextureRef` import path is the analog of the Windows D3D12 shared-handle path. Scry creates the producer texture and delegates the raw `MTLTexture *` → `wgpu::Texture` boundary to Graft.
 - IOSurface has implicit cross-API cache coherence on Apple silicon and via IOSurface locks on Intel, so today's correctness model doesn't require an explicit fence. A `MetalSharedEventSynchronizer` (parallel to `Dx12FenceSynchronizer`) is scaffolded but inert; ScreenCaptureKit doesn't expose its render queue, so there's no producer-side hook to drive a signal from. The infrastructure is ready for when SCK extends or a downstream consumer wires manual signal points.
 
 Critical caveat for event-loop hosts: blocking entry points (`navigate_to_url`, `navigate_to_string`, `start_capture`, `capture_cpu_snapshot`) pump the main `NSRunLoop` and **must not be called from inside a host event-loop callback** (winit's `resumed` / `window_event` etc.) — the pump re-enters the host's dispatch and panics. Each blocking method's docstring carries a `⚠️` warning and a pointer to the non-blocking equivalent (`load_url` / `load_html`, `start_capture_async` + `capture_status`, `request_snapshot` + `poll_snapshot`).

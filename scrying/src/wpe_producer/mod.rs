@@ -1,6 +1,6 @@
 //! Linux WPE producer (WPEPlatform headless).
 //!
-//! The planned Linux primary: a self-owned headless `WPEDisplay` +
+//! The Linux primary: a self-owned headless `WPEDisplay` +
 //! `WebKitWebView` render into DMABUF buffers that scrying imports
 //! through wgpu's Vulkan backend. GObject mechanics come from the `glib`
 //! crate; only WPE-specific symbols are hand-written `extern "C"`
@@ -54,7 +54,7 @@ pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
         ),
         supported_frames: vec![NativeFrameKind::DmaBufImage],
         reason: if cfg!(feature = "wpe") {
-            "WPE is the Linux primary backend (DMABUF + Vulkan external memory); the producer constructs a headless WPEDisplay + WebKitWebView and the buffer-rendered seam produces DmaBufImage frames. The wgpu-side importer integration is the remaining wiring."
+            "WPE is the Linux primary backend: a headless WPEDisplay + WebKitWebView produces DmaBufImage frames, and a compatible wgpu 30 Vulkan host imports them through Graft."
         } else {
             "WPE producer is compiled as a no-op scaffold; rebuild with `--features wpe` to enable the WPEPlatform FFI bridge and DMABUF frame production."
         },

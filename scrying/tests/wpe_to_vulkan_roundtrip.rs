@@ -25,6 +25,32 @@ use scrying::{
     SyncMechanism, TextureImporter, WebSurfaceFrame, WebSurfaceProducer, WgpuTextureImporter,
 };
 
+#[cfg(feature = "wgpu-30")]
+const SAMPLE_SHADER: &str = r#"
+struct VsOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vertex_index: u32) -> VsOut {
+    let x = f32((vertex_index & 1u) << 2u) - 1.0;
+    let y = f32((vertex_index & 2u) << 1u) - 1.0;
+    var out: VsOut;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+@group(0) @binding(0) var source: texture_2d<f32>;
+@group(0) @binding(1) var source_sampler: sampler;
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    return textureSample(source, source_sampler, in.uv);
+}
+"#;
+
 #[test]
 #[ignore = "needs a headless WPE display (GPU + Wayland); run manually"]
 fn wpe_to_vulkan_round_trip() {
@@ -40,7 +66,9 @@ fn wpe_to_vulkan_round_trip() {
 
     // --- 2. Navigate to inline HTML; verify load completion event ---
     if let Err(e) = producer.navigate_to_string(
-        "<body style='margin:0;background:#1e90ff'></body>",
+        "<!doctype html><html style='width:100%;height:100%;background:#1e90ff'>\
+         <body style='width:100%;height:100%;margin:0;background:#1e90ff'>\
+         <div style='position:fixed;inset:0;background:#1e90ff'></div></body></html>",
         std::time::Duration::from_secs(5),
     ) {
         eprintln!("SKIP: navigate_to_string failed: {e}");
@@ -58,6 +86,15 @@ fn wpe_to_vulkan_round_trip() {
         nav_events
     );
 
+    // Wait for and consume WPE's transparent startup frame. Merely draining
+    // the producer's current slot races the delayed `buffer-rendered`
+    // callback and can let that stale frame satisfy the content acquisition.
+    let first_frame = acquire_dmabuf_frame(&mut producer, "first navigation");
+    close_producer_fds(&first_frame);
+    producer
+        .resize(PhysicalSize::new(256, 256))
+        .expect("request a post-startup content repaint");
+
     // --- 3. Acquire one DMABUF frame ---
     //
     // `wait_for_load` (inside navigate_to_string) returns when load-changed
@@ -69,27 +106,13 @@ fn wpe_to_vulkan_round_trip() {
     // context the WPE producer uses (it was created with
     // `glib::MainContext::default()` in producer.rs), so iterating it here
     // delivers any pending callbacks including `buffer-rendered`.
-    let frame = {
-        let ctx = glib::MainContext::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match producer.acquire_frame() {
-                Ok(f) => break f,
-                Err(_) if std::time::Instant::now() < deadline => {
-                    ctx.iteration(false); // dispatch pending GLib events (non-blocking)
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                    continue;
-                }
-                Err(e) => panic!("FAIL: acquire_frame timed out after navigate: {e}"),
-            }
-        }
-    };
-    let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(image)) = frame else {
-        panic!("FAIL: expected a DMABUF frame, got something else");
-    };
+    let image = acquire_dmabuf_frame(&mut producer, "post-startup repaint");
 
     // WPE-side sanity (always-on assertions).
-    assert!(image.size.width > 0 && image.size.height > 0, "non-zero size");
+    assert!(
+        image.size.width > 0 && image.size.height > 0,
+        "non-zero size"
+    );
     assert!(!image.planes.is_empty(), "at least one plane");
     assert!(image.planes[0].fd >= 0, "valid dup'd fd");
     assert_eq!(image.producer_sync, SyncMechanism::None);
@@ -166,75 +189,57 @@ fn wpe_to_vulkan_round_trip() {
     let importer = WgpuTextureImporter::new(host);
     let expected_size = image.size;
     let expected_format = image.format;
-    let imported = match importer.import_frame(
-        &NativeFrame::DmaBufImage(image),
-        &ImportOptions::default(),
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            panic!(
-                "FAIL: import_frame errored — phase 4a.x multi-plane DCC import \
+    let imported =
+        match importer.import_frame(&NativeFrame::DmaBufImage(image), &ImportOptions::default()) {
+            Ok(t) => t,
+            Err(e) => {
+                panic!(
+                    "FAIL: import_frame errored — phase 4a.x multi-plane DCC import \
                  should accept this WPE buffer. Error: {e}"
-            );
-        }
-    };
+                );
+            }
+        };
 
     // --- 6. Assert: import returned a wgpu texture of the right shape ---
-    assert_eq!(imported.size.width, expected_size.width, "imported width matches");
-    assert_eq!(imported.size.height, expected_size.height, "imported height matches");
+    assert_eq!(
+        imported.size.width, expected_size.width,
+        "imported width matches"
+    );
+    assert_eq!(
+        imported.size.height, expected_size.height,
+        "imported height matches"
+    );
     assert_eq!(imported.format, expected_format, "imported format matches");
     eprintln!(
         "wpe→vk: imported texture {}x{} format={:?} gen={}",
         imported.size.width, imported.size.height, imported.format, imported.generation
     );
 
-    // --- 7. Pixel-correctness sampling (DIAGNOSTIC ONLY) ---
+    // --- 7. Pixel-correctness sampling ---
     //
-    // Reads a 64×64 center patch of the imported texture and PRINTS what
-    // BGRA values came back. Does NOT assert against expected dodger-blue
-    // (#1e90ff → sRGB-encoded ~B=255, G=144, R=30) because of a known
-    // upstream wgpu API gap that bites Vulkan DMABUF imports specifically:
-    //
-    //   `wgpu_core::device::resource.rs:1253` (wgpu 29.0.3) inserts every
-    //   `create_texture_from_hal` texture into the tracker with
-    //   `TextureUses::UNINITIALIZED`, which `derive_image_layout()`
-    //   resolves to `vk::ImageLayout::UNDEFINED`. wgpu's first-use
-    //   barrier therefore transitions `UNDEFINED → TRANSFER_SRC_OPTIMAL`
-    //   for `copy_texture_to_buffer`, and the Vulkan spec allows that
-    //   transition to discard contents. RADV honors that allowance on
-    //   the DCC modifier `0x020000044051ba01`; gbm-linear in the sibling
-    //   `tests/dmabuf_roundtrip.rs` happens to work because linear-tile
-    //   transitions are effectively no-ops on most drivers.
-    //
-    // Five layout/access combinations on our own foreign-queue acquire
-    // barrier (UNDEFINED→SHADER_READ_ONLY_OPTIMAL / GENERAL /
-    // TRANSFER_SRC_OPTIMAL × FOREIGN_EXT/IGNORED) all returned the same
-    // all-zero readback because wgpu's tracker doesn't see our
-    // intermediate layout — the spec-correct fix is a wgpu API addition
-    // letting consumers tell the tracker the initial state of an
-    // externally-imported texture.
-    //
-    // Until that lands upstream, this test:
-    //   - Asserts import shape (size + format + dimensions) — Step 6 above.
-    //   - Logs observed BGRA so when wgpu DOES expose initial-state, this
-    //     test will flip to assertion mode with one tiny change.
-    //   - Keeps the foreign-queue acquire barrier in `dmabuf::import`:
-    //     spec-correct, no-op for gbm-linear, ready to deliver pixels the
-    //     moment wgpu lands the API.
-    //
-    // The macOS and Windows backends sidestep this entirely: Metal's
-    // `MTLTexture*` and D3D12's `RESOURCE_STATE_COMMON` both preserve
-    // contents on import without requiring an initial-state declaration.
-    // Vulkan's `UNDEFINED-discards` rule is the asymmetric one.
+    // Exercise the imported texture through the contract consumers actually
+    // use: sample it into a host-owned render target, then read that target.
+    // A direct copy from a modifier-backed producer image asks the imported
+    // allocation to support transfer-source use that WPE did not negotiate.
+    #[cfg(feature = "wgpu-30")]
+    let sampled = sample_imported_texture(&device, &queue, &imported);
+    #[cfg(feature = "wgpu-30")]
+    let bytes = read_back_center_region(&device, &queue, &sampled, 64, 64);
+    #[cfg(not(feature = "wgpu-30"))]
     let bytes = read_back_center_region(
-        &device, &queue, &imported, expected_size.width, expected_size.height,
+        &device,
+        &queue,
+        &imported.texture,
+        expected_size.width,
+        expected_size.height,
     );
     let expected = [0xFFu8, 0x90, 0x1E, 0xFF]; // B, G, R, A for dodger-blue
     let tolerance: i32 = 8;
     let mut bad_pixels = 0usize;
     let mut first_bad: Option<(usize, [u8; 4])> = None;
     for (idx, px) in bytes.chunks_exact(4).enumerate() {
-        let off = px.iter()
+        let off = px
+            .iter()
             .zip(expected.iter())
             .any(|(g, e)| (*g as i32 - *e as i32).abs() > tolerance);
         if off {
@@ -245,21 +250,32 @@ fn wpe_to_vulkan_round_trip() {
         }
     }
     let total = 64 * 64;
-    if bad_pixels == 0 {
-        eprintln!(
-            "wpe→vk: pixel-correctness OK (64×64 center sample all within ±{} of BGRA={:?}) \
-             — upstream wgpu API gap appears resolved; this test can flip to assert!",
-            tolerance, expected
-        );
-    } else {
-        let (idx, bytes) = first_bad.unwrap_or((0, [0; 4]));
-        eprintln!(
-            "wpe→vk: pixel-correctness DIAGNOSTIC — {}/{} center pixels diverged from \
-             dodger-blue ±{}; first divergent px at index {} = BGRA{:?} (expected {:?}). \
-             Expected while wgpu's create_texture_from_hal lacks an initial-state API; \
-             see comment above. Import shape (size + format) was asserted in Step 6.",
-            bad_pixels, total, tolerance, idx, bytes, expected
-        );
+    let (first_bad_idx, first_bad_bytes) = first_bad.unwrap_or((0, expected));
+    assert_eq!(
+        bad_pixels, 0,
+        "{bad_pixels}/{total} center pixels diverged from dodger-blue ±{tolerance}; \
+         first divergent pixel at index {first_bad_idx} was BGRA{first_bad_bytes:?}, \
+         expected {expected:?}"
+    );
+    eprintln!(
+        "wpe→vk: pixel-correctness OK (64×64 center sample all within ±{} of BGRA={:?})",
+        tolerance, expected
+    );
+}
+
+fn acquire_dmabuf_frame(producer: &mut WpeProducer, boundary: &str) -> DmaBufImage {
+    let ctx = glib::MainContext::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match producer.acquire_frame() {
+            Ok(WebSurfaceFrame::Native(NativeFrame::DmaBufImage(image))) => return image,
+            Ok(_) => panic!("FAIL: expected a DMABUF frame after {boundary}"),
+            Err(_) if std::time::Instant::now() < deadline => {
+                ctx.iteration(false);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(e) => panic!("FAIL: acquire_frame timed out after {boundary}: {e}"),
+        }
     }
 }
 
@@ -276,7 +292,7 @@ fn wpe_to_vulkan_round_trip() {
 fn read_back_center_region(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    imported: &ImportedTexture,
+    texture: &wgpu::Texture,
     full_width: u32,
     full_height: u32,
 ) -> Vec<u8> {
@@ -297,9 +313,13 @@ fn read_back_center_region(
     let center_y = full_height / 2 - SAMPLE_H / 2;
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
-            texture: &imported.texture,
+            texture,
             mip_level: 0,
-            origin: wgpu::Origin3d { x: center_x, y: center_y, z: 0 },
+            origin: wgpu::Origin3d {
+                x: center_x,
+                y: center_y,
+                z: 0,
+            },
             aspect: wgpu::TextureAspect::All,
         },
         wgpu::TexelCopyBufferInfo {
@@ -334,6 +354,11 @@ fn read_back_center_region(
         .expect("map_async sender dropped")
         .expect("map_async failed");
 
+    #[cfg(feature = "wgpu-30")]
+    let mapped = buffer_slice
+        .get_mapped_range()
+        .expect("readback buffer map range");
+    #[cfg(not(feature = "wgpu-30"))]
     let mapped = buffer_slice.get_mapped_range();
     let mut bytes = Vec::with_capacity((SAMPLE_W as usize) * (SAMPLE_H as usize) * 4);
     for row in 0..SAMPLE_H as usize {
@@ -346,6 +371,141 @@ fn read_back_center_region(
     bytes
 }
 
+/// Sample the imported producer texture into a host-owned 64x64 target.
+/// This mirrors the compositing path used by the demos and keeps readback
+/// requirements off the externally allocated image itself.
+#[cfg(feature = "wgpu-30")]
+fn sample_imported_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    imported: &ImportedTexture,
+) -> wgpu::Texture {
+    const SAMPLE_SIZE: u32 = 64;
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("wpe_roundtrip_sample_target"),
+        size: wgpu::Extent3d {
+            width: SAMPLE_SIZE,
+            height: SAMPLE_SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let source_view = imported
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("wpe_roundtrip_sample_sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    });
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("wpe_roundtrip_sample_bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("wpe_roundtrip_sample_bg"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&source_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("wpe_roundtrip_sample_pl"),
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("wpe_roundtrip_sample_shader"),
+        source: wgpu::ShaderSource::Wgsl(SAMPLE_SHADER.into()),
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("wpe_roundtrip_sample_pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("wpe_roundtrip_sample_encoder"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("wpe_roundtrip_sample_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    queue.submit(std::iter::once(encoder.finish()));
+    target
+}
+
 /// Close producer-owned dup'd fds on a `DmaBufImage` that was never
 /// handed to the importer. Used only on the SKIP branch where the
 /// wgpu host couldn't be built — on the import path, `import_frame`
@@ -354,10 +514,14 @@ fn read_back_center_region(
 fn close_producer_fds(image: &DmaBufImage) {
     for plane in &image.planes {
         // SAFETY: producer-owned dup'd fd not yet transferred to the importer.
-        unsafe { libc::close(plane.fd); }
+        unsafe {
+            libc::close(plane.fd);
+        }
     }
     if let Some(fd) = image.semaphore_fd {
-        unsafe { libc::close(fd); }
+        unsafe {
+            libc::close(fd);
+        }
     }
 }
 
@@ -383,6 +547,8 @@ fn make_vulkan_host() -> Option<(wgpu::Device, wgpu::Queue, HostWgpuContext)> {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
+        #[cfg(feature = "wgpu-30")]
+        apply_limit_buckets: false,
     }))
     .ok()?;
 

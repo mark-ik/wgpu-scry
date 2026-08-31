@@ -1445,13 +1445,13 @@ dependencies = [
 [[package]]
 name = "grafting"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b178b2462c5511a664799505665349d5294499b33a7b53a26fe4cd5eb85a7162"
+source = "git+https://github.com/merely-made/wgpu-graft.git?rev=842b8fdeeffb701b76ba4b320c435968ee1b3f4a#842b8fdeeffb701b76ba4b320c435968ee1b3f4a"
 dependencies = [
  "ash",
  "dpi",
  "foreign-types-shared",
  "gl_generator",
+ "libc",
  "metal",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
@@ -3517,9 +3517,6 @@ dependencies = [
  "wgpu-hal 28.0.1",
  "wgpu-hal 29.0.4",
  "wgpu-hal 30.0.1",
- "wgpu-types 28.0.0",
- "wgpu-types 29.0.4",
- "wgpu-types 30.0.1",
  "windows",
  "windows-numerics",
 ]
