@@ -691,6 +691,10 @@ struct BrowserTestState {
     /// the document script ran before the test issues its next
     /// navigation or browser command.
     last_loaded_page: String,
+    /// Most recent URL observed through a completed navigation.
+    /// Back/forward restores may come from WebKit's page cache and
+    /// therefore do not rerun the page's `loaded:*` script.
+    last_completed_url: String,
     failures: Vec<String>,
 }
 
@@ -1486,6 +1490,11 @@ fn handle_key(state: &mut AppState, event: KeyEvent) {
 fn drain_events(state: &mut AppState) {
     while let Some(event) = state.producer.poll_navigation_event() {
         println!("demo-mac: nav event: {event:?}");
+        if let Some(test) = state.browser_test.as_mut()
+            && let NavigationEvent::Completed { url, success: true } = &event
+        {
+            test.last_completed_url = url.clone();
+        }
         if let Some(test) = state.interaction_state_test.as_mut()
             && let NavigationEvent::Completed { url, .. } = &event
         {
@@ -2087,13 +2096,13 @@ fn advance_browser_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
             }
         }
         BrowserTestStep::AwaitBack => {
-            if test.last_loaded_page == "history-1" {
+            if test.last_completed_url.contains("history-1") {
                 println!("demo-mac: browser-test: go_back navigated to history-1");
                 step_to!(BrowserTestStep::GoForward);
             } else if elapsed > Duration::from_secs(5) {
                 test.failures.push(format!(
                     "go_back didn't navigate to history-1 (saw '{}')",
-                    test.last_loaded_page
+                    test.last_completed_url
                 ));
                 step_to!(BrowserTestStep::ApplySettings);
             }
@@ -2119,13 +2128,13 @@ fn advance_browser_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
             }
         }
         BrowserTestStep::AwaitForward => {
-            if test.last_loaded_page == "history-2" {
+            if test.last_completed_url.contains("history-2") {
                 println!("demo-mac: browser-test: go_forward navigated to history-2");
                 step_to!(BrowserTestStep::ApplySettings);
             } else if elapsed > Duration::from_secs(5) {
                 test.failures.push(format!(
                     "go_forward didn't navigate to history-2 (saw '{}')",
-                    test.last_loaded_page
+                    test.last_completed_url
                 ));
                 step_to!(BrowserTestStep::ApplySettings);
             }
