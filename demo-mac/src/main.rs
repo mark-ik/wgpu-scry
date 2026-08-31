@@ -686,9 +686,11 @@ struct BrowserTestState {
     find_result: Option<bool>,
     pdf_bytes: Option<usize>,
     pdf_error: Option<String>,
-    /// Most recent committed URL observed via SourceChanged. Used
-    /// to verify go_back / go_forward actually navigated.
-    last_committed_url: String,
+    /// Most recent page marker observed through the page's
+    /// `loaded:*` web message. Unlike `SourceChanged`, this proves
+    /// the document script ran before the test issues its next
+    /// navigation or browser command.
+    last_loaded_page: String,
     failures: Vec<String>,
 }
 
@@ -1484,17 +1486,6 @@ fn handle_key(state: &mut AppState, event: KeyEvent) {
 fn drain_events(state: &mut AppState) {
     while let Some(event) = state.producer.poll_navigation_event() {
         println!("demo-mac: nav event: {event:?}");
-        // Update browser-test state machine on URL changes so
-        // go_back / go_forward / load_url completions can be
-        // observed.
-        if let Some(test) = state.browser_test.as_mut() {
-            match &event {
-                NavigationEvent::SourceChanged { url } | NavigationEvent::Completed { url, .. } => {
-                    test.last_committed_url = url.clone();
-                }
-                _ => {}
-            }
-        }
         if let Some(test) = state.interaction_state_test.as_mut()
             && let NavigationEvent::Completed { url, .. } = &event
         {
@@ -1547,6 +1538,11 @@ fn drain_events(state: &mut AppState) {
     }
     while let Some(message) = state.producer.poll_web_message() {
         println!("demo-mac: js->host: {message}");
+        if let Some(test) = state.browser_test.as_mut()
+            && let Some(page) = message.strip_prefix("loaded:")
+        {
+            test.last_loaded_page = page.to_string();
+        }
         if let Some(scripted) = state.scripted.as_mut() {
             if message == "ready" {
                 scripted.saw_ready = true;
@@ -2038,7 +2034,7 @@ fn advance_browser_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
             step_to!(BrowserTestStep::AwaitFirst);
         }
         BrowserTestStep::AwaitFirst => {
-            if test.last_committed_url.contains("history-1") {
+            if test.last_loaded_page == "history-1" {
                 println!("demo-mac: browser-test: history-1 loaded");
                 step_to!(BrowserTestStep::LoadSecond);
             } else if elapsed > Duration::from_secs(5) {
@@ -2055,7 +2051,7 @@ fn advance_browser_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
             step_to!(BrowserTestStep::AwaitSecond);
         }
         BrowserTestStep::AwaitSecond => {
-            if test.last_committed_url.contains("history-2") {
+            if test.last_loaded_page == "history-2" {
                 println!("demo-mac: browser-test: history-2 loaded");
                 step_to!(BrowserTestStep::GoBack);
             } else if elapsed > Duration::from_secs(5) {
@@ -2091,13 +2087,13 @@ fn advance_browser_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
             }
         }
         BrowserTestStep::AwaitBack => {
-            if test.last_committed_url.contains("history-1") {
+            if test.last_loaded_page == "history-1" {
                 println!("demo-mac: browser-test: go_back navigated to history-1");
                 step_to!(BrowserTestStep::GoForward);
             } else if elapsed > Duration::from_secs(5) {
                 test.failures.push(format!(
                     "go_back didn't navigate to history-1 (saw '{}')",
-                    test.last_committed_url
+                    test.last_loaded_page
                 ));
                 step_to!(BrowserTestStep::ApplySettings);
             }
@@ -2123,13 +2119,13 @@ fn advance_browser_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
             }
         }
         BrowserTestStep::AwaitForward => {
-            if test.last_committed_url.contains("history-2") {
+            if test.last_loaded_page == "history-2" {
                 println!("demo-mac: browser-test: go_forward navigated to history-2");
                 step_to!(BrowserTestStep::ApplySettings);
             } else if elapsed > Duration::from_secs(5) {
                 test.failures.push(format!(
                     "go_forward didn't navigate to history-2 (saw '{}')",
-                    test.last_committed_url
+                    test.last_loaded_page
                 ));
                 step_to!(BrowserTestStep::ApplySettings);
             }
@@ -2160,7 +2156,7 @@ fn advance_browser_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
             step_to!(BrowserTestStep::AwaitFindPage);
         }
         BrowserTestStep::AwaitFindPage => {
-            if test.last_committed_url.contains("find-target") {
+            if test.last_loaded_page == "find-target" {
                 step_to!(BrowserTestStep::FindInPage);
             } else if elapsed > Duration::from_secs(5) {
                 test.failures.push("find-target never loaded".into());
@@ -2236,7 +2232,7 @@ fn advance_browser_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 println!("  - settings (apply_settings returned Ok)");
                 println!(
                     "  - URL schemes (scrying-test:// served {} pages successfully)",
-                    if test.last_committed_url.contains("find-target") {
+                    if test.last_loaded_page == "find-target" {
                         3
                     } else {
                         2
