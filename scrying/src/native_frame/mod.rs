@@ -156,7 +156,7 @@ pub struct Dx12SharedTexture {
 /// `wgpu::Device::as_hal::<Metal>().raw_device()`) so the resulting
 /// texture is usable on the host's wgpu queue without cross-device
 /// migration.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct MetalTextureRef {
     pub size: PhysicalSize<u32>,
     pub format: wgpu::TextureFormat,

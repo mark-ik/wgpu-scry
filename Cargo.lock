@@ -1444,8 +1444,8 @@ dependencies = [
 
 [[package]]
 name = "grafting"
-version = "0.5.1"
-source = "git+https://github.com/merely-made/wgpu-graft.git?rev=8106f7c6b16838eb9ec062f0293249b39c108907#8106f7c6b16838eb9ec062f0293249b39c108907"
+version = "0.6.0"
+source = "git+https://github.com/merely-made/wgpu-graft.git?rev=59cd8a3ec017aca46b0756d2ec90fd0a62550ef4#59cd8a3ec017aca46b0756d2ec90fd0a62550ef4"
 dependencies = [
  "ash",
  "dpi",
@@ -3474,7 +3474,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scrying"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ash",
  "block2 0.6.2",

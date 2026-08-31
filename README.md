@@ -12,8 +12,9 @@ Extracted from
 ## Status (2026-08-31)
 
 `scrying` 0.6.0 is published on crates.io and working across all five
-backends. It carries feature-selected wgpu 28/29/30, defaults to wgpu 30, and
-requires at least wgpu 30.0.1 on that row.
+backends; `main` is the 0.7.0 compatibility revision, where borrowed Metal
+frame descriptors are move-only. It carries feature-selected wgpu 28/29/30,
+defaults to wgpu 30, and requires at least wgpu 30.0.1 on that row.
 
 - Frame transports are proven per platform: Windows WebView2 capture into a
   shared D3D11 texture imported by wgpu D3D12 (the reference
@@ -25,7 +26,7 @@ requires at least wgpu 30.0.1 on that row.
   popups, find, and PDF. Per-backend state and caveats live in
   [`docs/parity-matrix.md`](docs/parity-matrix.md).
 - DX12, Metal, and Vulkan/DMABUF imports delegate to the sibling `grafting`
-  crate at immutable revision `8106f7c`; Scry keeps webview and sync policy.
+  crate at immutable revision `59cd8a3`; Scry keeps webview and sync policy.
 - CI runs the macOS suite, the WebKitGTK 4.1 Linux suite, and a required Fedora
   44 WPE producer/demo build on every push.
 
