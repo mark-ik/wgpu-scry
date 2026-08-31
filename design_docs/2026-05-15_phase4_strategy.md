@@ -334,7 +334,8 @@ artifact.
 - [x] **4a.6** Signaled-semaphore round-trip exercising the 4a.2 wait
       path end-to-end
 - [x] **4a.7** `build_dmabuf_capable_device` helper — enables
-      `VK_EXT_image_drm_format_modifier` + `VK_KHR_external_semaphore_fd`
+      `VK_EXT_image_drm_format_modifier` + `VK_EXT_queue_family_foreign` +
+      `VK_KHR_external_semaphore_fd`
       at device creation (validated under `VK_LAYER_KHRONOS_validation`)
 - [x] **4a.x** Multi-plane shared-fd DMABUF import (DCC-compressed RGBA)
       + foreign-queue acquire barrier — non-YUV multi-plane: planes

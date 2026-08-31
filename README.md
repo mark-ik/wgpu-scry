@@ -25,7 +25,7 @@ requires at least wgpu 30.0.1 on that row.
   popups, find, and PDF. Per-backend state and caveats live in
   [`docs/parity-matrix.md`](docs/parity-matrix.md).
 - DX12, Metal, and Vulkan/DMABUF imports delegate to the sibling `grafting`
-  crate at immutable revision `842b8fd`; Scry keeps webview and sync policy.
+  crate at immutable revision `8106f7c`; Scry keeps webview and sync policy.
 - CI runs the macOS suite, the WebKitGTK 4.1 Linux suite, and a required Fedora
   44 WPE producer/demo build on every push.
 

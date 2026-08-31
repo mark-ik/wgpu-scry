@@ -553,8 +553,9 @@ fn make_vulkan_host() -> Option<(wgpu::Device, wgpu::Queue, HostWgpuContext)> {
     .ok()?;
 
     // Phase 4a.7 — use the scrying helper that enables
-    // VK_EXT_image_drm_format_modifier + VK_KHR_external_semaphore_fd
-    // at device creation time. Without these, the import path only
+    // VK_EXT_image_drm_format_modifier + VK_EXT_queue_family_foreign +
+    // VK_KHR_external_semaphore_fd at device creation time. Without these,
+    // the import path only
     // works by accident (Mesa permissiveness) and the wait path
     // SKIPs because the function pointers can't be resolved.
     let desc = wgpu::DeviceDescriptor {

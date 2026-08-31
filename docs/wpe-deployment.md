@@ -187,6 +187,11 @@ boundary to `grafting::vulkan_dmabuf::import_dmabuf`. `demo-wpe` shows the
 discipline of inspecting and releasing without importing; production
 consumers hand the frame to the importer.
 
+Construct that host with `build_dmabuf_capable_device`. It enables
+`VK_EXT_queue_family_foreign` alongside the DRM-modifier and external-semaphore
+extensions; the capability probe rejects an ordinary wgpu device before Graft
+records a foreign-family acquire barrier.
+
 ### Plane-fd ownership
 
 Every `DmaBufPlane.fd` and the optional `DmaBufImage.semaphore_fd`
@@ -323,7 +328,9 @@ Headed receipt from 2026-08-31:
   repaint, sampled the imported texture through a host-owned 64×64 target,
   and required all 4,096 pixels to be within ±8 of BGRA
   `[255, 144, 30, 255]`.
-- Result: 4,096/4,096 pixels passed.
+- The host device explicitly enabled `VK_EXT_queue_family_foreign`; the
+  requested Khronos validation layer emitted no VUID diagnostics.
+- Result: 4,096/4,096 pixels passed in 0.48 seconds.
 
 ```sh
 export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0

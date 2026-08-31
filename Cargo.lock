@@ -1445,7 +1445,7 @@ dependencies = [
 [[package]]
 name = "grafting"
 version = "0.5.1"
-source = "git+https://github.com/merely-made/wgpu-graft.git?rev=842b8fdeeffb701b76ba4b320c435968ee1b3f4a#842b8fdeeffb701b76ba4b320c435968ee1b3f4a"
+source = "git+https://github.com/merely-made/wgpu-graft.git?rev=8106f7c6b16838eb9ec062f0293249b39c108907#8106f7c6b16838eb9ec062f0293249b39c108907"
 dependencies = [
  "ash",
  "dpi",

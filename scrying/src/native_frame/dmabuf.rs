@@ -218,6 +218,12 @@ pub(crate) fn probe_dmabuf_extensions(host: &HostWgpuContext) -> Result<(), Unsu
     {
         let hal_device = unsafe { host.device.as_hal::<Vulkan>() }
             .ok_or(UnsupportedReason::HostBackendMismatch)?;
+        if !hal_device
+            .enabled_device_extensions()
+            .contains(&vk::EXT_QUEUE_FAMILY_FOREIGN_NAME)
+        {
+            return Err(UnsupportedReason::NativeImportNotYetImplemented);
+        }
         let raw_device = hal_device.raw_device();
         let ash_instance = hal_device.shared_instance().raw_instance();
         for name in [
@@ -249,13 +255,15 @@ pub enum DmaBufDeviceError {
     DeviceCreation(#[from] wgpu::RequestDeviceError),
 }
 
-/// Build a wgpu device with DRM-modifier and external-semaphore support.
+/// Build a wgpu device with DRM-modifier, foreign-queue, and
+/// external-semaphore support.
 pub fn build_dmabuf_capable_device(
     adapter: &wgpu::Adapter,
     desc: &wgpu::DeviceDescriptor<'_>,
 ) -> Result<(wgpu::Device, wgpu::Queue), DmaBufDeviceError> {
     const REQUIRED: &[&CStr] = &[
         vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_NAME,
+        vk::EXT_QUEUE_FAMILY_FOREIGN_NAME,
         vk::KHR_EXTERNAL_SEMAPHORE_FD_NAME,
     ];
 
