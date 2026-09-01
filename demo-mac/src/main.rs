@@ -39,6 +39,17 @@ use winit::window::{Window, WindowAttributes};
 
 const INITIAL_URL: &str = "https://example.com";
 
+fn demo_data_root() -> std::io::Result<PathBuf> {
+    let root = std::env::var_os("SCRY_DEMO_DATA_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target"));
+    if root.is_absolute() {
+        Ok(root)
+    } else {
+        Ok(std::env::current_dir()?.join(root))
+    }
+}
+
 /// Body served by the `--download-test` HTTP server. 256 KiB of a
 /// known repeating pattern. Bumped from 64 KiB so phase E's slow
 /// streaming path (8 KiB chunks at 200 ms apart → ~6.4 s total
@@ -1303,7 +1314,6 @@ impl ApplicationHandler for App {
                     if let Err(error) = render.render(&mut state.producer) {
                         eprintln!("demo-mac: render failed: {error}");
                     }
-                    state.window.request_redraw();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -3688,25 +3698,26 @@ impl AppState {
         // host might run. The profile-test mode uses its own subdir
         // so multiple back-to-back runs share a stable persistent
         // store without bleeding into the regular demo profile.
+        let data_root = demo_data_root()?;
         let data_dir = if cli.profile_test {
             // PID-suffixed so each test run gets a fresh shared
             // store — prior-run cookies can't false-positive the
             // "cookie X is in producer #2's store" assertion.
             let pid = std::process::id();
-            std::env::current_dir()?.join(format!("target/demo-mac-profile-test-{pid}"))
+            data_root.join(format!("demo-mac-profile-test-{pid}"))
         } else if cli.incognito_test {
             // Hint path is ignored when `non_persistent` wins, but we
             // pass a unique one anyway so the bookkeeping in the
             // producer is unambiguous if we ever flip the flag off.
-            std::env::current_dir()?.join("target/demo-mac-incognito")
+            data_root.join("demo-mac-incognito")
         } else if cli.download_test {
             // PID-suffixed so each run gets a fresh
             // WKWebsiteDataStore (test asserts cleanly even if a
             // prior run crashed mid-download).
             let pid = std::process::id();
-            std::env::current_dir()?.join(format!("target/demo-mac-download-test-{pid}"))
+            data_root.join(format!("demo-mac-download-test-{pid}"))
         } else {
-            std::env::current_dir()?.join("target/demo-mac-profile")
+            data_root.join("demo-mac-profile")
         };
         let mut producer_config = WkWebViewProducerConfig::new(webview_size, &data_dir);
         producer_config.color_pipeline = cli.color_pipeline;
@@ -3778,8 +3789,8 @@ impl AppState {
         // stale cookies from prior runs can't false-positive.
         let second_producer = if cli.incognito_test {
             let pid = std::process::id();
-            let persistent_data_dir = std::env::current_dir()?
-                .join(format!("target/demo-mac-incognito-persistent-{pid}"));
+            let persistent_data_dir =
+                data_root.join(format!("demo-mac-incognito-persistent-{pid}"));
             let second_config = WkWebViewProducerConfig::new(
                 PhysicalSize::new(inner.width, inner.height),
                 &persistent_data_dir,
@@ -3815,7 +3826,7 @@ impl AppState {
             // nav-event queue saw only its own URL.
             let _ = producer.load_url("scrying-test://history-1");
 
-            let second_data_dir = std::env::current_dir()?.join("target/demo-mac-multi-tab");
+            let second_data_dir = data_root.join("demo-mac-multi-tab");
             let second_config = WkWebViewProducerConfig::new(
                 PhysicalSize::new(inner.width, half_height),
                 &second_data_dir,

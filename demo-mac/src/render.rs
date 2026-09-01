@@ -385,6 +385,9 @@ impl WgpuRender {
                 self.surface.configure(&self.device, &self.surface_config);
                 return Ok(());
             }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
             other => {
                 return Err(format!("surface acquire failed: {other:?}").into());
             }

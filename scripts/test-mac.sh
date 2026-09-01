@@ -117,6 +117,11 @@ run_mode() {
 
     : >"$log"
     open_args=(-W -n -F --stdout "$log" --stderr "$log")
+    data_root="${SCRY_DEMO_DATA_ROOT:-${CARGO_TARGET_DIR:-$PWD/target}}"
+    if [[ "$data_root" != /* ]]; then
+        data_root="$PWD/$data_root"
+    fi
+    open_args+=(--env "SCRY_DEMO_DATA_ROOT=$data_root")
     # LaunchServices starts a fresh application environment. Forward the
     # graphics and diagnostic knobs that matter to the demo explicitly.
     for key in $(compgen -e); do

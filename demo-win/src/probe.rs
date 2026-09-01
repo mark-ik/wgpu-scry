@@ -446,7 +446,24 @@ pub(crate) fn run_windows_shared_texture_probe(
     }
 
     let hwnd = hwnd_from_window(window)?;
-    let captured = unsafe { capture_window_frame_once(hwnd, std::time::Duration::from_secs(2)) }?;
+    let captured = match unsafe {
+        capture_window_frame_once(hwnd, std::time::Duration::from_secs(5))
+    } {
+        Ok(frame) => frame,
+        Err(first_error) => {
+            eprintln!(
+                "GraphicsCapture window probe: first acquire failed ({first_error}); retrying once"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            unsafe { capture_window_frame_once(hwnd, std::time::Duration::from_secs(5)) }.map_err(
+                |second_error| {
+                    format!(
+                        "GraphicsCapture window probe failed twice: first={first_error}; second={second_error}"
+                    )
+                },
+            )?
+        }
+    };
     let captured_handle = captured.shared_frame.shared_handle;
     let captured_dx12 = DxgiSharedHandleBridge.bridge_shared_handle(captured.shared_frame)?;
     let captured_surface_frame = captured_dx12.into_surface_frame();
