@@ -172,6 +172,12 @@ cargo run -p demo-mac -- --capture-test
 cargo run -p demo-mac -- --capture-test --resize-test
 ```
 
+The self-hosted hardware workflow runs the full suite with
+`VISIBLE=1 CAPTURE=1`. `VISIBLE=1` adds `--visible` to the modes that normally
+hide their AppKit window; the hosted macOS workflow keeps the default headless
+behavior. The bounded two-tab assertion is already visible and retains its
+auto-exit deadline.
+
 ### `--profile-test`
 
 Persistent-store complement to [`--incognito-test`](#--incognito-test):

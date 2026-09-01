@@ -24,7 +24,7 @@ pub(crate) fn validate_platform_keyboard_smoke(
     pump_windows_messages_for(std::time::Duration::from_millis(150));
     // No mouse-click sequence here: --accelerator-test passes the same
     // SendInput path with no mouse click, so the click was a confound.
-    focus_host_window(parent_hwnd);
+    focus_host_window(parent_hwnd)?;
     send_system_text(EXPECTED)?;
 
     let outcome =
@@ -224,7 +224,7 @@ pub(crate) fn validate_platform_accelerator_bridge(
     drain_navigation_events(producer);
     producer.move_focus(scrying::FocusReason::Programmatic)?;
     pump_windows_messages_for(std::time::Duration::from_millis(150));
-    focus_host_window(parent_hwnd);
+    focus_host_window(parent_hwnd)?;
     send_system_key_chord(&[VK_CONTROL], VK_F3)?;
 
     let event =
@@ -645,11 +645,32 @@ fn format_route_results(results: &[CdpRouteResult]) -> String {
         .join("; ")
 }
 
-fn focus_host_window(parent_hwnd: windows::Win32::Foundation::HWND) {
-    unsafe {
-        let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(parent_hwnd);
+fn focus_host_window(
+    parent_hwnd: windows::Win32::Foundation::HWND,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, SetForegroundWindow,
+    };
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        unsafe {
+            let _ = BringWindowToTop(parent_hwnd);
+            let _ = SetForegroundWindow(parent_hwnd);
+        }
+        pump_windows_messages_for(std::time::Duration::from_millis(50));
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground == parent_hwnd {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "physical keyboard gate could not acquire foreground: expected host HWND 0x{:x}, current foreground HWND 0x{:x}",
+                parent_hwnd.0 as usize, foreground.0 as usize
+            )
+            .into());
+        }
     }
-    pump_windows_messages_for(std::time::Duration::from_millis(150));
 }
 
 pub(crate) fn send_system_text(text: &str) -> Result<(), Box<dyn std::error::Error>> {

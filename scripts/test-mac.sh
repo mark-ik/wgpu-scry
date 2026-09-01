@@ -8,7 +8,8 @@
 # Each mode is wrapped in a wall-clock alarm via perl(1) — internal
 # step deadlines (typically 5s per step) should keep the process
 # under the alarm even on a slow runner, but the alarm guarantees
-# no test mode can hang the whole suite.
+# no test mode can hang the whole suite. The alarm executes the built
+# demo directly, so it owns the process that must be terminated.
 #
 # Each \`--*-test\` mode runs headless by default (no visible window,
 # `NSApplicationActivationPolicyProhibited` so the developer's
@@ -26,6 +27,9 @@
 # ScreenCaptureKit is intentionally a separate hardware suite because macOS
 # must grant Screen Recording permission to the runner ahead of time:
 #     CAPTURE=1 bash scripts/test-mac.sh
+# Self-hosted hardware runners should also make the AppKit tests visible. Their
+# background runner sessions do not reliably advance hidden WKWebViews:
+#     VISIBLE=1 CAPTURE=1 bash scripts/test-mac.sh
 
 set -uo pipefail
 
@@ -54,6 +58,12 @@ fi
 echo "==> building demo-mac"
 cargo build --locked -q -p demo-mac
 
+DEMO_BIN="${CARGO_TARGET_DIR:-target}/debug/demo-mac"
+if [[ ! -x "$DEMO_BIN" ]]; then
+    echo "demo-mac executable not found at $DEMO_BIN" >&2
+    exit 1
+fi
+
 passed=0
 failed=0
 failed_modes=()
@@ -65,8 +75,13 @@ for mode in "${MODES[@]}"; do
     if [[ "$mode" = "--capture-test+resize" ]]; then
         args=(--capture-test --resize-test)
     fi
+    # The two-tabs gate is already visible by default and uses the absence of
+    # --visible to retain its bounded auto-exit deadline.
+    if [[ "${VISIBLE:-0}" = "1" && "$mode" != "--two-tabs" ]]; then
+        args+=(--visible)
+    fi
     if perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
-        cargo run --locked -q -p demo-mac -- "${args[@]}"; then
+        "$DEMO_BIN" "${args[@]}"; then
         echo "  -> PASS"
         passed=$((passed + 1))
     else

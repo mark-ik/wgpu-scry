@@ -605,7 +605,21 @@ pub(crate) fn run_platform_composition_visual_probe(
         }
     };
 
-    let user_data_dir = std::env::temp_dir().join("demo-win-composition-webview2");
+    // Keep the interactive demo's profile durable, but give every one-shot
+    // assertion process a fresh profile. Reusing the interactive profile made
+    // WebView2 remember permission decisions and bypass PermissionRequested on
+    // later hardware runs.
+    let user_data_dir = if cli.one_shot() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "demo-win-composition-webview2-smoke-{}-{nonce}",
+            std::process::id()
+        ))
+    } else {
+        std::env::temp_dir().join("demo-win-composition-webview2")
+    };
     // Smokes assume the bounded constants (textarea caret bounds, profile
     // multi-view layout, capture-test fixed sizes); interactive runs deserve a
     // producer that already matches the resize-time layout (right-half of the
