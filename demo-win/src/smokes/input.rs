@@ -648,15 +648,30 @@ fn format_route_results(results: &[CdpRouteResult]) -> String {
 fn focus_host_window(
     parent_hwnd: windows::Win32::Foundation::HWND,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use windows::Win32::System::Threading::AttachThreadInput;
     use windows::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetForegroundWindow, SetForegroundWindow,
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
     };
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
+        let foreground = unsafe { GetForegroundWindow() };
+        let host_thread = unsafe { GetWindowThreadProcessId(parent_hwnd, None) };
+        let foreground_thread = unsafe { GetWindowThreadProcessId(foreground, None) };
+        // A service-launched self-hosted runner can leave another window's
+        // input queue in front. Attach only long enough to perform the normal
+        // foreground handoff; setting Win32 focus here breaks WebView2's
+        // CompositionController focus established above.
+        let attached = host_thread != 0
+            && foreground_thread != 0
+            && host_thread != foreground_thread
+            && unsafe { AttachThreadInput(host_thread, foreground_thread, true).as_bool() };
         unsafe {
             let _ = BringWindowToTop(parent_hwnd);
             let _ = SetForegroundWindow(parent_hwnd);
+            if attached {
+                let _ = AttachThreadInput(host_thread, foreground_thread, false);
+            }
         }
         pump_windows_messages_for(std::time::Duration::from_millis(50));
         let foreground = unsafe { GetForegroundWindow() };
