@@ -1,0 +1,116 @@
+name: headed hardware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scrying/**"
+      - "demo-win/**"
+      - "demo-mac/**"
+      - "demo-wpe/**"
+      - "scripts/test-win.ps1"
+      - "scripts/test-mac.sh"
+      - ".github/workflows/hardware-headed.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scry-headed-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUSTFLAGS: -D warnings
+
+jobs:
+  windows-webview2:
+    name: NVIDIA WebView2 assertion battery
+    runs-on: [self-hosted, wgpu-hardware, nvidia, windows-x64, headed]
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: C:\Users\mark_\Code\targets\wgpu-scry-hardware
+      RUSTUP_TOOLCHAIN: 1.97.1
+      WGPU_BACKEND: dx12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert the provisioned toolchain and adapter
+        shell: powershell
+        run: |
+          rustc +1.97.1 --version
+          cargo +1.97.1 --version
+          nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+
+      - name: Run browser-shape assertions
+        shell: pwsh
+        run: scripts/test-win.ps1 -Suite Core -TimeoutSeconds 120
+
+      - name: Run DX12 capture and scale assertions
+        shell: pwsh
+        run: scripts/test-win.ps1 -Suite Capture -TimeoutSeconds 120 -SkipBuild
+
+  metal-m4:
+    name: Apple M4 WKWebView and ScreenCaptureKit battery
+    runs-on: [self-hosted, wgpu-hardware, metal, macos-arm64, m4, headed]
+    timeout-minutes: 50
+    env:
+      CARGO_TARGET_DIR: /Users/markik/Code/targets/wgpu-scry-hardware
+      CAPTURE: "1"
+      TIMEOUT: "90"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - name: Run WKWebView assertions including live capture and resize
+        run: bash scripts/test-mac.sh
+
+  metal-intel:
+    name: Intel iMac WKWebView and ScreenCaptureKit battery
+    runs-on: [self-hosted, wgpu-hardware, metal, macos-x64, intel-mac, headed]
+    timeout-minutes: 50
+    env:
+      CARGO_TARGET_DIR: /Users/markik/Code/targets/wgpu-scry-hardware
+      CAPTURE: "1"
+      TIMEOUT: "90"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - name: Run WKWebView assertions including live capture and resize
+        run: bash scripts/test-mac.sh
+
+  radv-wpe:
+    name: RADV WPE to Vulkan pixel gate
+    runs-on: [self-hosted, wgpu-hardware, radv, wayland, headed]
+    timeout-minutes: 35
+    env:
+      CARGO_TARGET_DIR: /home/markik/Code/targets/wgpu-scry-hardware
+      XDG_RUNTIME_DIR: /run/user/1000
+      WAYLAND_DISPLAY: wayland-0
+      DISPLAY: ""
+      DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
+      XDG_SESSION_TYPE: wayland
+      XDG_CURRENT_DESKTOP: GNOME
+      WGPU_BACKEND: vulkan
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Assert the native Wayland and WPE environment
+        run: |
+          test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+          test -z "${DISPLAY:-}"
+          pkg-config --atleast-version=2.52 wpe-webkit-2.0
+          loginctl show-session 2 -p Active -p Type
+
+      - name: Run WPE DMABUF to Vulkan pixel gate
+        run: >-
+          cargo test --locked -p scrying --features wpe
+          --test wpe_to_vulkan_roundtrip --
+          --ignored --nocapture --test-threads=1

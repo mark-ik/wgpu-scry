@@ -161,13 +161,15 @@ window). Once `capture_status` reports `Live`, drains 5 frames
 via `try_acquire_frame` and asserts each frame's reported
 `(width, height)` matches the configured webview size.
 
-**Held out of `scripts/test-mac.sh`** because Screen Recording
-permission can't be granted from inside the test process — a
-fresh macOS user prompts on first SCK call, and CI runners need
-a pre-grant via `tccutil`. Run manually:
+The default `scripts/test-mac.sh` suite still holds this out because Screen
+Recording permission can't be granted from inside the test process. Trusted
+headed runners with a pre-grant execute it through `CAPTURE=1`; that suite also
+runs `--capture-test --resize-test` and requires repeated frames at every
+scheduled capture size. Run either gate manually:
 
 ```bash
 cargo run -p demo-mac -- --capture-test
+cargo run -p demo-mac -- --capture-test --resize-test
 ```
 
 ### `--profile-test`

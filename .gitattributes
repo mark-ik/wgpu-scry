@@ -44,3 +44,4 @@
 *.kojo merge=weave
 *.mill merge=weave
 *.dart merge=weave
+*.sh text eol=lf

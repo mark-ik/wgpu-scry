@@ -665,16 +665,14 @@ struct AppState {
     /// Set by `--download-test`. Drives the three-phase
     /// download-pipeline assertion.
     download_test: Option<DownloadTestState>,
-    /// Set by `--capture-test`. Counts SCK frames + asserts size.
+    /// Set by `--capture-test`. Counts SCK frames and asserts every requested
+    /// capture size. Pairing it with `--resize-test` turns the old open-ended
+    /// resize demo into a bounded ScreenCaptureKit reconfiguration gate.
     capture_test: Option<CaptureTestState>,
     /// Set when `--two-tabs` is invoked. Per-tab URL log used at
     /// deadline to assert each producer's nav events stayed in
     /// its own queue (no cross-talk).
     two_tabs_test: Option<TwoTabsTestState>,
-    /// Webview / capture region size we actually configured
-    /// (`--capture` mode uses left half of the window). Used by
-    /// `--capture-test` to assert the SCK frame dims match.
-    config_capture_size: (u32, u32),
     started_at: Instant,
 }
 
@@ -776,12 +774,18 @@ fn nav_event_url(event: &NavigationEvent) -> Option<String> {
     }
 }
 
-#[derive(Default)]
 struct CaptureTestState {
     /// Frames received via `try_acquire_frame` so far. Each entry
     /// is the frame's reported `(width, height)` so the test can
     /// assert dims match the configured webview size.
     frame_dims: Vec<(u32, u32)>,
+    /// Every capture dimension the bounded run must observe. A plain
+    /// `--capture-test` has one entry; `--capture-test --resize-test` carries
+    /// the initial size plus each scheduled half-window capture size.
+    expected_dims: Vec<(u32, u32)>,
+    /// Number of frames required at each expected size. Requiring several
+    /// samples keeps a one-off stale transition frame from becoming a receipt.
+    frames_per_size: usize,
     /// Set when the SCK pipeline went `Live` and the test moved
     /// from "spinning up" to "draining frames".
     saw_live: bool,
@@ -2952,18 +2956,26 @@ fn advance_capture_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
         }
     }
 
-    let target = 5usize;
     let saw_enough = state
         .capture_test
         .as_ref()
-        .map(|t| t.frame_dims.len() >= target)
+        .map(|test| {
+            test.expected_dims.iter().all(|expected| {
+                test.frame_dims
+                    .iter()
+                    .filter(|actual| *actual == expected)
+                    .count()
+                    >= test.frames_per_size
+            })
+        })
         .unwrap_or(true);
     let timed_out = state.started_at.elapsed() > Duration::from_secs(30);
     if saw_enough || timed_out {
         if !saw_enough && let Some(test) = state.capture_test.as_mut() {
             test.failures.push(format!(
-                "captured {} frame(s) within 30s (target: {target})",
-                test.frame_dims.len()
+                "captured {} frame(s) within 30s without observing {} frame(s) at every expected size",
+                test.frame_dims.len(),
+                test.frames_per_size,
             ));
         }
         finalize_capture_test(state, event_loop);
@@ -2978,22 +2990,36 @@ fn finalize_capture_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
     let Some(test) = state.capture_test.take() else {
         return;
     };
-    let expected = state.config_capture_size;
     let mut failures = test.failures;
-    for (i, &(w, h)) in test.frame_dims.iter().enumerate() {
-        if (w, h) != expected {
+    for expected in &test.expected_dims {
+        let count = test
+            .frame_dims
+            .iter()
+            .filter(|actual| *actual == expected)
+            .count();
+        if count < test.frames_per_size {
             failures.push(format!(
-                "frame #{} dims = {}x{}, expected {}x{}",
-                i, w, h, expected.0, expected.1
+                "observed {count} frame(s) at {}x{}, expected at least {}",
+                expected.0, expected.1, test.frames_per_size,
             ));
         }
     }
+    for &(w, h) in &test.frame_dims {
+        if !test.expected_dims.contains(&(w, h)) {
+            failures.push(format!("unexpected capture dimensions {w}x{h}"));
+        }
+    }
     if failures.is_empty() {
+        let sizes = test
+            .expected_dims
+            .iter()
+            .map(|(w, h)| format!("{w}x{h}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         println!(
-            "demo-mac: capture-test: PASS — SCK pipeline delivered {} frames at {}x{}",
+            "demo-mac: capture-test: PASS — SCK pipeline delivered {} frames across [{}]",
             test.frame_dims.len(),
-            expected.0,
-            expected.1,
+            sizes,
         );
         event_loop.exit();
     } else {
@@ -3837,6 +3863,22 @@ impl AppState {
             None
         };
 
+        let capture_test = cli.capture_test.then(|| {
+            let mut expected_dims = vec![(webview_size.width, webview_size.height)];
+            if let Some(steps) = resize_test_steps.as_ref() {
+                expected_dims.extend(steps.iter().map(|(width, height, _)| (*width / 2, *height)));
+                expected_dims.sort_unstable();
+                expected_dims.dedup();
+            }
+            CaptureTestState {
+                frame_dims: Vec::new(),
+                expected_dims,
+                frames_per_size: if cli.resize_test { 3 } else { 5 },
+                saw_live: false,
+                failures: Vec::new(),
+            }
+        });
+
         // Download-test mode needs a `Content-Disposition: attachment`
         // HTTP response — WebKit doesn't promote custom URL-scheme
         // responses to downloads even when they're octet-stream, so
@@ -3916,8 +3958,7 @@ impl AppState {
                 ..IncognitoTestState::default()
             }),
             download_test: download_test_state,
-            capture_test: cli.capture_test.then(CaptureTestState::default),
-            config_capture_size: (webview_size.width, webview_size.height),
+            capture_test,
             started_at: Instant::now(),
         })
     }

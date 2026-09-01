@@ -23,7 +23,7 @@ jobs:
       - run: cargo check --locked -p scrying --lib --no-default-features --features ${{ matrix.wgpu }}
 
   host-wgpu-30:
-    name: Windows wgpu 30 host
+    name: Windows wgpu 30 hosts
     runs-on: windows-latest
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -31,4 +31,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --locked -p demo-scrying-winit
+      - name: Check portable host and real WebView2 demo
+        run: cargo check --locked -p demo-scrying-winit -p demo-win

@@ -119,3 +119,26 @@ jobs:
         run: >-
           cargo test --locked -p scrying --features wpe
           --test wpe_to_vulkan_roundtrip --no-run
+
+  webkit6-fedora-build:
+    name: WebKitGTK 6 demo (Fedora 44)
+    runs-on: ubuntu-latest
+    container: fedora:44
+    env:
+      RUSTFLAGS: -D warnings
+
+    steps:
+      - name: Install build and WebKitGTK 6 packages
+        run: >-
+          dnf install -y git curl gcc gcc-c++ pkgconf-pkg-config
+          gtk4-devel webkitgtk6.0-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check WebKitGTK 6 producer and demo
+        run: |
+          cargo check --locked -p scrying --features webkit6
+          cargo check --locked -p demo-linux6

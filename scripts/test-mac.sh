@@ -22,6 +22,10 @@
 #   - cargo on PATH
 #   - a logged-in macOS user session (the AppKit run loop still
 #     needs a WindowServer connection even for hidden windows)
+#
+# ScreenCaptureKit is intentionally a separate hardware suite because macOS
+# must grant Screen Recording permission to the runner ahead of time:
+#     CAPTURE=1 bash scripts/test-mac.sh
 
 set -uo pipefail
 
@@ -42,9 +46,13 @@ MODES=(
     --two-tabs
 )
 
+if [[ "${CAPTURE:-0}" = "1" ]]; then
+    MODES+=(--capture-test --capture-test+resize)
+fi
+
 # Build once so each `cargo run` invocation skips compile overhead.
 echo "==> building demo-mac"
-cargo build -q -p demo-mac
+cargo build --locked -q -p demo-mac
 
 passed=0
 failed=0
@@ -53,8 +61,12 @@ failed_modes=()
 for mode in "${MODES[@]}"; do
     echo
     echo "==> $mode"
+    args=("$mode")
+    if [[ "$mode" = "--capture-test+resize" ]]; then
+        args=(--capture-test --resize-test)
+    fi
     if perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
-        cargo run -q -p demo-mac -- "$mode"; then
+        cargo run --locked -q -p demo-mac -- "${args[@]}"; then
         echo "  -> PASS"
         passed=$((passed + 1))
     else
