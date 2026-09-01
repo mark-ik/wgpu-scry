@@ -174,9 +174,11 @@ cargo run -p demo-mac -- --capture-test --resize-test
 
 The self-hosted hardware workflow runs the full suite with
 `VISIBLE=1 CAPTURE=1`. `VISIBLE=1` adds `--visible` to the modes that normally
-hide their AppKit window; the hosted macOS workflow keeps the default headless
-behavior. The bounded two-tab assertion is already visible and retains its
-auto-exit deadline.
+hide their AppKit window and launches the built binary from a stable `.app`
+through LaunchServices. That gives WKWebView and ScreenCaptureKit the logged-in
+GUI context that a runner-spawned binary lacks. The hosted macOS workflow keeps
+the default headless, direct-executable behavior. The bounded two-tab assertion
+is already visible and retains its auto-exit deadline.
 
 ### `--profile-test`
 

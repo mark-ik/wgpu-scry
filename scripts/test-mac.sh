@@ -27,8 +27,10 @@
 # ScreenCaptureKit is intentionally a separate hardware suite because macOS
 # must grant Screen Recording permission to the runner ahead of time:
 #     CAPTURE=1 bash scripts/test-mac.sh
-# Self-hosted hardware runners should also make the AppKit tests visible. Their
-# background runner sessions do not reliably advance hidden WKWebViews:
+# Self-hosted hardware runners should also make the AppKit tests visible. This
+# makes the script wrap the built binary in a stable .app and use
+# LaunchServices, because a binary spawned directly from the runner's idle
+# process context does not reliably advance WKWebView or ScreenCaptureKit:
 #     VISIBLE=1 CAPTURE=1 bash scripts/test-mac.sh
 
 set -uo pipefail
@@ -64,6 +66,75 @@ if [[ ! -x "$DEMO_BIN" ]]; then
     exit 1
 fi
 
+DEMO_APP=""
+if [[ "$(uname -s)" = "Darwin" && "${VISIBLE:-0}" = "1" ]]; then
+    DEMO_APP="${SCRY_MAC_APP:-${CARGO_TARGET_DIR:-target}/debug/scry-demo-mac-hardware.app}"
+    case "$DEMO_APP" in
+        *.app) ;;
+        *)
+            echo "SCRY_MAC_APP must end in .app: $DEMO_APP" >&2
+            exit 1
+            ;;
+    esac
+    mkdir -p "$DEMO_APP/Contents/MacOS"
+    cp "$DEMO_BIN" "$DEMO_APP/Contents/MacOS/demo-mac.new"
+    chmod +x "$DEMO_APP/Contents/MacOS/demo-mac.new"
+    mv -f "$DEMO_APP/Contents/MacOS/demo-mac.new" "$DEMO_APP/Contents/MacOS/demo-mac"
+    plist="$DEMO_APP/Contents/Info.plist"
+    rm -f "$plist"
+    plutil -create xml1 "$plist"
+    plutil -insert CFBundleExecutable -string demo-mac "$plist"
+    plutil -insert CFBundleIdentifier -string org.merely.scry.hardware-demo "$plist"
+    plutil -insert CFBundleName -string demo-mac "$plist"
+    plutil -insert CFBundleDisplayName -string "Scry demo-mac hardware gate" "$plist"
+    plutil -insert CFBundlePackageType -string APPL "$plist"
+    plutil -insert CFBundleShortVersionString -string 0.7.0 "$plist"
+    plutil -insert CFBundleVersion -string 1 "$plist"
+    plutil -insert NSHighResolutionCapable -bool true "$plist"
+    echo "==> LaunchServices app: $DEMO_APP"
+fi
+
+stop_demo_app() {
+    [[ -n "$DEMO_APP" ]] || return 0
+    app_executable="$DEMO_APP/Contents/MacOS/demo-mac"
+    while read -r pid command; do
+        if [[ "$command" = *"$app_executable"* ]]; then
+            kill "$pid" 2>/dev/null || true
+        fi
+    done < <(ps -ax -o pid= -o command=)
+    return 0
+}
+trap stop_demo_app EXIT
+
+run_mode() {
+    log="$1"
+    shift
+    if [[ -z "$DEMO_APP" ]]; then
+        perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
+            "$DEMO_BIN" "$@" >"$log" 2>&1
+        return $?
+    fi
+
+    : >"$log"
+    open_args=(-W -n -F --stdout "$log" --stderr "$log")
+    # LaunchServices starts a fresh application environment. Forward the
+    # graphics and diagnostic knobs that matter to the demo explicitly.
+    for key in $(compgen -e); do
+        case "$key" in
+            MTL_* | RUST_* | SCRY_* | WGPU_* | WEBKIT_*)
+                open_args+=(--env "$key=${!key}")
+                ;;
+        esac
+    done
+    perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
+        open "${open_args[@]}" "$DEMO_APP" --args "$@"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        stop_demo_app
+    fi
+    return $rc
+}
+
 passed=0
 failed=0
 failed_modes=()
@@ -80,20 +151,30 @@ for mode in "${MODES[@]}"; do
     if [[ "${VISIBLE:-0}" = "1" && "$mode" != "--two-tabs" ]]; then
         args+=(--visible)
     fi
-    if perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
-        "$DEMO_BIN" "${args[@]}"; then
+    log="${TMPDIR:-/tmp}/scry-demo-mac-$$-${mode#--}.log"
+    if run_mode "$log" "${args[@]}"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    if [[ -f "$log" ]]; then
+        cat "$log"
+    fi
+    if [[ $rc -eq 0 ]] && grep -q 'demo-mac: .*: PASS' "$log"; then
         echo "  -> PASS"
         passed=$((passed + 1))
     else
-        rc=$?
         if [[ $rc -eq 142 ]]; then
             echo "  -> FAIL (timed out after ${TIMEOUT}s)"
+        elif [[ $rc -eq 0 ]]; then
+            echo "  -> FAIL (PASS receipt absent)"
         else
             echo "  -> FAIL (exit $rc)"
         fi
         failed=$((failed + 1))
         failed_modes+=("$mode")
     fi
+    rm -f "$log"
 done
 
 echo
