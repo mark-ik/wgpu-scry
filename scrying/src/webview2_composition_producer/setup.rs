@@ -543,10 +543,10 @@ impl WebView2CompositionProducer {
     /// panes. Construct a standalone producer with [`Self::new`] for a
     /// movable native host.
     ///
-    /// The Windows Graphics Capture session is restarted because its capture
-    /// item is tied to the composition visual's destination. The next
-    /// `try_acquire_frame` starts it again; the existing shared-device factory
-    /// and the imported-resource contract are retained.
+    /// The Windows Graphics Capture session is retained because its capture
+    /// item is tied to this producer's `webview_visual`, which moves with the
+    /// composition root. Its pending pre-move arrivals are discarded, while
+    /// the shared-device factory and imported-resource contract are retained.
     ///
     /// # Safety
     ///
@@ -626,7 +626,7 @@ impl WebView2CompositionProducer {
         // only a best-effort layout refresh; WebView2 will still receive the
         // next bounds/position update from the destination host.
         self.parent_hwnd = parent_hwnd;
-        self.force_restart_capture();
+        self.preserve_capture_after_visual_reparent();
         if let Err(error) = unsafe { controller.NotifyParentWindowPositionChanged() } {
             eprintln!(
                 "[producer] reparented WebView2 to {:p}, but position notification failed: {error}",

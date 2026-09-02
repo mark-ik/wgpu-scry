@@ -62,6 +62,20 @@ impl WebView2CompositionProducer {
         }
     }
 
+    /// Keep a visual-bound WGC session through a composition-host move.
+    ///
+    /// `GraphicsCaptureItem::CreateFromVisual` captures `webview_visual`, not
+    /// its `DesktopWindowTarget` or parent HWND. Reparenting moves the same
+    /// visual tree to another target, so closing a pending session here loses
+    /// the first post-move callback before the externally driven redraw loop
+    /// can observe it. Frames already queued before the target handoff are
+    /// deliberately skipped; the next arrival is the post-move observation.
+    pub(super) fn preserve_capture_after_visual_reparent(&mut self) {
+        if let Some(state) = self.capture_state.as_mut() {
+            state.mark_arrivals_observed();
+        }
+    }
+
     pub fn invalidate_persistent_dest(&mut self) {
         self.persistent_dest = None;
     }
@@ -423,11 +437,49 @@ impl WebView2CompositionProducer {
 
 impl CaptureState {
     fn frame_ready(&mut self) -> bool {
-        let arrivals = self.frame_arrivals.load(Ordering::Relaxed);
-        if arrivals == self.frame_arrivals_observed {
-            return false;
-        }
-        self.frame_arrivals_observed = arrivals;
-        true
+        take_unobserved_arrival(&self.frame_arrivals, &mut self.frame_arrivals_observed)
+    }
+
+    fn mark_arrivals_observed(&mut self) {
+        mark_arrivals_observed(&self.frame_arrivals, &mut self.frame_arrivals_observed);
+    }
+}
+
+fn take_unobserved_arrival(arrivals: &AtomicU64, observed: &mut u64) -> bool {
+    let current = arrivals.load(Ordering::Relaxed);
+    if current == *observed {
+        return false;
+    }
+    *observed = current;
+    true
+}
+
+fn mark_arrivals_observed(arrivals: &AtomicU64, observed: &mut u64) {
+    *observed = arrivals.load(Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{mark_arrivals_observed, take_unobserved_arrival};
+
+    #[test]
+    fn visual_reparent_keeps_pending_capture_and_discards_only_pre_move_arrivals() {
+        let arrivals = AtomicU64::new(4);
+        let mut observed = 1;
+
+        // A visual-host move retains the pool/session and advances only the
+        // observation cursor, so old queued frames are not presented after
+        // the move.
+        mark_arrivals_observed(&arrivals, &mut observed);
+        assert_eq!(observed, 4);
+        assert!(!take_unobserved_arrival(&arrivals, &mut observed));
+
+        // The same retained callback stream still exposes the first frame
+        // that arrives after reparenting.
+        arrivals.fetch_add(1, Ordering::Relaxed);
+        assert!(take_unobserved_arrival(&arrivals, &mut observed));
+        assert_eq!(observed, 5);
     }
 }
