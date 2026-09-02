@@ -52,7 +52,10 @@ texture, bridged into the host as a shared NT handle for Graft import.
 `takeSnapshot:` path (one-shot, >50ms latency, `CpuSnapshot` tier) and
 a ScreenCaptureKit → `IOSurfaceRef` → `MTLTexture` path for live
 composited frames (`ImportedTexture` tier). The SCK path needs the
-Screen Recording privacy permission. See
+Screen Recording privacy permission. Headed hardware runs wrap the demo in
+the stable `org.merely.scry.hardware-demo` app bundle and require a persistent
+Developer ID/Apple Development signing identity (or
+`SCRY_MAC_CODESIGN_IDENTITY`) so that permission survives rebuilds. See
 [`wkwebview_producer/mod.rs`](../scrying/src/wkwebview_producer/mod.rs).
 
 [^wpe-dcc]: The wgpu 30 path is pixel-verified on AMD Renoir/RADV with

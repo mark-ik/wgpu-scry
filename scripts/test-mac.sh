@@ -25,7 +25,9 @@
 #     needs a WindowServer connection even for hidden windows)
 #
 # ScreenCaptureKit is intentionally a separate hardware suite because macOS
-# must grant Screen Recording permission to the runner ahead of time:
+# must grant Screen Recording permission to the generated app ahead of time.
+# The app is signed with SCRY_MAC_CODESIGN_IDENTITY, or the first available
+# Developer ID/Apple Development identity, so the grant survives rebuilds:
 #     CAPTURE=1 bash scripts/test-mac.sh
 # Self-hosted hardware runners should also make the AppKit tests visible. This
 # makes the script wrap the built binary in a stable .app and use
@@ -91,18 +93,35 @@ if [[ "$(uname -s)" = "Darwin" && "${VISIBLE:-0}" = "1" ]]; then
     plutil -insert CFBundleShortVersionString -string 0.7.0 "$plist"
     plutil -insert CFBundleVersion -string 1 "$plist"
     plutil -insert NSHighResolutionCapable -bool true "$plist"
-    requirement_file="${TMPDIR:-/tmp}/scry-hardware-requirement-$$.req"
-    printf '%s\n' 'designated => identifier "org.merely.scry.hardware-demo"' >"$requirement_file"
-    if ! codesign --force --sign - \
-        --identifier org.merely.scry.hardware-demo \
-        --requirements "$requirement_file" \
-        "$DEMO_APP"
-    then
-        rm -f "$requirement_file"
+    codesign_identity="${SCRY_MAC_CODESIGN_IDENTITY:-}"
+    if [[ -z "$codesign_identity" ]]; then
+        codesign_identity="$({
+            security find-identity -v -p codesigning 2>/dev/null || true
+        } | awk '/"Developer ID Application:/{print $2; exit}')"
+    fi
+    if [[ -z "$codesign_identity" ]]; then
+        codesign_identity="$({
+            security find-identity -v -p codesigning 2>/dev/null || true
+        } | awk '/"Apple Development:/{print $2; exit}')"
+    fi
+    if [[ -z "$codesign_identity" && "${CAPTURE:-0}" = "1" ]]; then
+        echo "ScreenCaptureKit hardware runs require a persistent code-signing identity." >&2
+        echo "Set SCRY_MAC_CODESIGN_IDENTITY or install a Developer ID/Apple Development identity." >&2
         exit 1
     fi
-    rm -f "$requirement_file"
+    if [[ -z "$codesign_identity" ]]; then
+        codesign_identity="-"
+    fi
+    if ! codesign --force --sign "$codesign_identity" \
+        --identifier org.merely.scry.hardware-demo \
+        --timestamp=none \
+        "$DEMO_APP"
+    then
+        exit 1
+    fi
     codesign --verify --deep --strict "$DEMO_APP"
+    echo "==> code-signing identity: $codesign_identity"
+    codesign -d -r- "$DEMO_APP" 2>&1
     echo "==> LaunchServices app: $DEMO_APP"
 fi
 
