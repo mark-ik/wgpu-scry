@@ -102,10 +102,10 @@ impl CompositionRoot {
         }))
     }
 
-    /// Prepare a new target on this root's existing compositor without
-    /// dropping the current target. The caller either commits it after the
-    /// WebView2 controller changes host, or drops it and explicitly restores
-    /// the old target before reporting a rejected migration.
+    /// Prepare a new target on this root's existing compositor without moving
+    /// its root visual yet. A composition visual can be the root of only one
+    /// target, so assigning it directly while `desktop_target` still owns it
+    /// fails with `E_INVALIDARG`.
     ///
     /// # Safety
     ///
@@ -122,13 +122,38 @@ impl CompositionRoot {
         let desktop_target =
             unsafe { desktop_interop.CreateDesktopWindowTarget(parent_hwnd, false) }
                 .map_err(platform("CreateDesktopWindowTarget (reparent)"))?;
-        desktop_target
-            .SetRoot(&self.root_visual)
-            .map_err(platform("DesktopWindowTarget::SetRoot (reparent)"))?;
         Ok(PreparedCompositionRootHost {
             parent_hwnd,
             desktop_target,
         })
+    }
+
+    /// Move the root visual from the committed target to `prepared`.
+    ///
+    /// This is deliberately an explicit detach/attach transaction: WinComp
+    /// rejects a visual that is still the root of another target. If the
+    /// destination rejects the visual, release that candidate before putting
+    /// the visual back on the source target. A failed source restore has no
+    /// truthful ordinary-failure state and is reported as indeterminate.
+    fn activate_prepared_reparent(
+        &self,
+        prepared: PreparedCompositionRootHost,
+    ) -> Result<PreparedCompositionRootHost, WebSurfaceError> {
+        self.desktop_target
+            .SetRoot(None::<&Visual>)
+            .map_err(platform(
+                "DesktopWindowTarget::SetRoot (detach reparent source)",
+            ))?;
+        if let Err(error) = prepared.desktop_target.SetRoot(&self.root_visual) {
+            drop(prepared);
+            if let Err(restore_error) = self.restore_current_target() {
+                return Err(WebSurfaceError::HostMigrationIndeterminate(format!(
+                    "DesktopWindowTarget::SetRoot (reparent) returned {error} after detaching the source root, and source-root restore failed: {restore_error}"
+                )));
+            }
+            return Err(platform("DesktopWindowTarget::SetRoot (reparent)")(error));
+        }
+        Ok(prepared)
     }
 
     /// Commit a prepared target after the WebView2 controller has moved.
@@ -138,8 +163,8 @@ impl CompositionRoot {
         self.parent_hwnd = prepared.parent_hwnd;
     }
 
-    /// Reassert this root on its currently committed target after a discarded
-    /// candidate target may have claimed the visual.
+    /// Reassert this root on its currently committed target after the
+    /// destination candidate has been dropped.
     fn restore_current_target(&self) -> Result<(), WebSurfaceError> {
         self.desktop_target
             .SetRoot(&self.root_visual)
@@ -544,10 +569,12 @@ impl WebView2CompositionProducer {
             )
         })?;
 
-        // Keep the existing DesktopWindowTarget alive until WebView2 accepts
-        // the destination. A normal controller rejection simply drops this
-        // prepared target and leaves the old composition host intact.
+        // Create the destination target first, then explicitly move the root
+        // visual off its source target. WinComp does not permit a visual to be
+        // root of both targets at once. `activate_prepared_reparent` restores
+        // the source before it returns an ordinary error.
         let prepared = unsafe { composition_root.prepare_reparent_to_hwnd(parent_hwnd.0) }?;
+        let prepared = composition_root.activate_prepared_reparent(prepared)?;
         match unsafe { controller.SetParentWindow(parent_hwnd) } {
             Ok(()) => composition_root.commit_reparent(prepared),
             Err(error) => {
@@ -569,28 +596,25 @@ impl WebView2CompositionProducer {
                         composition_root.commit_reparent(prepared);
                     }
                     Ok(()) => {
-                        drop(prepared);
-                        let restore_result = composition_root.restore_current_target();
+                        // Preserve the candidate target because it currently
+                        // owns the root visual. The controller's terminal host
+                        // is unknown, so neither source nor destination
+                        // custody can be reported truthfully as ordinary.
+                        composition_root.commit_reparent(prepared);
+                        self.parent_hwnd = parent_hwnd;
                         return Err(WebSurfaceError::HostMigrationIndeterminate(format!(
-                            "controller.SetParentWindow returned {error}, then reported unexpected parent {:p} (source {:p}, destination {:p}); source-target restore: {}",
-                            observed_parent.0,
-                            old_parent_hwnd.0,
-                            parent_hwnd.0,
-                            restore_result.map_or_else(
-                                |restore_error| restore_error.to_string(),
-                                |_| "succeeded".to_string()
-                            ),
+                            "controller.SetParentWindow returned {error}, then reported unexpected parent {:p} (source {:p}, destination {:p}); composition root remains on destination",
+                            observed_parent.0, old_parent_hwnd.0, parent_hwnd.0,
                         )));
                     }
                     Err(observe_error) => {
-                        drop(prepared);
-                        let restore_result = composition_root.restore_current_target();
+                        // As above, keep the root's known destination target
+                        // alive rather than dropping it into an unobservable
+                        // state while the controller host is unknown.
+                        composition_root.commit_reparent(prepared);
+                        self.parent_hwnd = parent_hwnd;
                         return Err(WebSurfaceError::HostMigrationIndeterminate(format!(
-                            "controller.SetParentWindow returned {error}, and ParentWindow could not determine the terminal host: {observe_error}; source-target restore: {}",
-                            restore_result.map_or_else(
-                                |restore_error| restore_error.to_string(),
-                                |_| "succeeded".to_string()
-                            ),
+                            "controller.SetParentWindow returned {error}, and ParentWindow could not determine the terminal host: {observe_error}; composition root remains on destination",
                         )));
                     }
                 }
