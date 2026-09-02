@@ -797,9 +797,13 @@ struct CaptureTestState {
     /// Number of frames required at each expected size. Requiring several
     /// samples keeps a one-off stale transition frame from becoming a receipt.
     frames_per_size: usize,
-    /// Set when the SCK pipeline went `Live` and the test moved
-    /// from "spinning up" to "draining frames".
-    saw_live: bool,
+    /// Set when `start_capture_async` is first attempted. The startup
+    /// deadline is measured from this point rather than app construction.
+    capture_started_at: Option<Instant>,
+    /// Set when the SCK pipeline first goes `Live`. Frame sampling and
+    /// capture-test resize schedules are measured from this point so macOS
+    /// permission/startup latency cannot consume their observation windows.
+    live_started_at: Option<Instant>,
     /// Final pass/fail accumulator.
     failures: Vec<String>,
 }
@@ -1129,6 +1133,9 @@ impl ApplicationHandler for App {
                 && state.started_at.elapsed() >= kickoff
                 && let Some(render) = state.render.as_ref()
             {
+                if let Some(test) = state.capture_test.as_mut() {
+                    test.capture_started_at.get_or_insert_with(Instant::now);
+                }
                 let host = render.host_context.clone();
                 match state.producer.start_capture_async(host) {
                     Ok(()) => {
@@ -1146,8 +1153,13 @@ impl ApplicationHandler for App {
             // both the producer's `resize` path and slice N's live
             // `SCStream::updateConfiguration:` callback.
             if let Some(steps) = state.resize_test_steps.as_ref() {
-                let elapsed = state.started_at.elapsed();
-                if state.resize_test_idx < steps.len() {
+                let elapsed = state.capture_test.as_ref().map_or_else(
+                    || Some(state.started_at.elapsed()),
+                    |test| test.live_started_at.map(|started_at| started_at.elapsed()),
+                );
+                if let Some(elapsed) = elapsed
+                    && state.resize_test_idx < steps.len()
+                {
                     let (w, h, at) = steps[state.resize_test_idx];
                     if elapsed >= at {
                         let new_size = winit::dpi::PhysicalSize::new(w, h);
@@ -1193,12 +1205,14 @@ impl ApplicationHandler for App {
                     }
                     CaptureStatus::Starting | CaptureStatus::Idle => {
                         // Still spinning up; keep polling.
-                        if let Some(_test) = state.capture_test.as_ref() {
+                        if let Some(test) = state.capture_test.as_ref() {
                             // Bail on a startup deadline — Screen
                             // Recording permission failures often
                             // surface as "stuck in Starting"
                             // rather than an immediate `Failed`.
-                            if state.started_at.elapsed() > Duration::from_secs(15) {
+                            if test.capture_started_at.is_some_and(|started_at| {
+                                started_at.elapsed() > Duration::from_secs(15)
+                            }) {
                                 eprintln!(
                                     "demo-mac: capture-test: capture_status stuck in Starting/Idle for 15s — Screen Recording permission likely missing"
                                 );
@@ -2926,14 +2940,14 @@ fn finalize_two_tabs_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
 /// Drain frames in `--capture-test` mode. Called only when
 /// `capture_status` reports `Live`. Each call pulls one frame via
 /// `try_acquire_frame`, records its `(width, height)` for later
-/// assertion, and advances toward the 5-frame target. Once
-/// reached (or the 30-second wall-clock timeout fires), routes to
+/// assertion, and advances toward the per-size frame target. Once
+/// reached (or 30 seconds after the stream became live), routes to
 /// `finalize_capture_test`.
 fn advance_capture_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
     let Some(test) = state.capture_test.as_mut() else {
         return;
     };
-    test.saw_live = true;
+    let live_started_at = *test.live_started_at.get_or_insert_with(Instant::now);
 
     match state.producer.try_acquire_frame() {
         Ok(Some(scrying::WebSurfaceFrame::Native(scrying::NativeFrame::MetalTextureRef(
@@ -2979,7 +2993,7 @@ fn advance_capture_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
             })
         })
         .unwrap_or(true);
-    let timed_out = state.started_at.elapsed() > Duration::from_secs(30);
+    let timed_out = live_started_at.elapsed() > Duration::from_secs(30);
     if saw_enough || timed_out {
         if !saw_enough && let Some(test) = state.capture_test.as_mut() {
             test.failures.push(format!(
@@ -3885,7 +3899,8 @@ impl AppState {
                 frame_dims: Vec::new(),
                 expected_dims,
                 frames_per_size: if cli.resize_test { 3 } else { 5 },
-                saw_live: false,
+                capture_started_at: None,
+                live_started_at: None,
                 failures: Vec::new(),
             }
         });
