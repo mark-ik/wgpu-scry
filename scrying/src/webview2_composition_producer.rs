@@ -415,6 +415,14 @@ impl crate::WebSurfaceProducer for WebView2CompositionProducer {
         Ok(())
     }
 
+    unsafe fn reparent_to_hwnd(
+        &mut self,
+        parent_hwnd: *mut std::ffi::c_void,
+    ) -> Result<(), WebSurfaceError> {
+        // Safety: upheld by the trait method's safety contract.
+        unsafe { WebView2CompositionProducer::reparent_to_hwnd(self, parent_hwnd) }
+    }
+
     fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
         WebView2CompositionProducer::load_html(self, html)
     }

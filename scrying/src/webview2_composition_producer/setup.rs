@@ -37,13 +37,9 @@ impl CompositionRoot {
     /// `parent_hwnd` must be a live top-level HWND for the lifetime of the
     /// returned root and every producer attached to it.
     pub unsafe fn new(parent_hwnd: *mut std::ffi::c_void) -> Result<Arc<Self>, WebSurfaceError> {
-        if parent_hwnd.is_null() {
-            return Err(WebSurfaceError::Platform(
-                "parent HWND was null".to_string(),
-            ));
-        }
+        let parent_hwnd = host_hwnd(parent_hwnd)?;
         // Safety: forwarded from this fn's `# Safety` contract.
-        unsafe { Self::build(HWND(parent_hwnd), None) }
+        unsafe { Self::build(parent_hwnd, None) }
     }
 
     /// Capture-only hosting: bind the composition tree to a private off-screen
@@ -105,6 +101,89 @@ impl CompositionRoot {
             owned_host,
         }))
     }
+
+    /// Prepare a new target on this root's existing compositor without moving
+    /// its root visual yet. A composition visual can be the root of only one
+    /// target, so assigning it directly while `desktop_target` still owns it
+    /// fails with `E_INVALIDARG`.
+    ///
+    /// # Safety
+    ///
+    /// `parent_hwnd` must be a live top-level HWND on this composition thread.
+    unsafe fn prepare_reparent_to_hwnd(
+        &self,
+        parent_hwnd: *mut std::ffi::c_void,
+    ) -> Result<PreparedCompositionRootHost, WebSurfaceError> {
+        let parent_hwnd = host_hwnd(parent_hwnd)?;
+        let desktop_interop: ICompositorDesktopInterop = self
+            .compositor
+            .cast()
+            .map_err(platform("Compositor cast to ICompositorDesktopInterop"))?;
+        let desktop_target =
+            unsafe { desktop_interop.CreateDesktopWindowTarget(parent_hwnd, false) }
+                .map_err(platform("CreateDesktopWindowTarget (reparent)"))?;
+        Ok(PreparedCompositionRootHost {
+            parent_hwnd,
+            desktop_target,
+        })
+    }
+
+    /// Move the root visual from the committed target to `prepared`.
+    ///
+    /// This is deliberately an explicit detach/attach transaction: WinComp
+    /// rejects a visual that is still the root of another target. If the
+    /// destination rejects the visual, release that candidate before putting
+    /// the visual back on the source target. A failed source restore has no
+    /// truthful ordinary-failure state and is reported as indeterminate.
+    fn activate_prepared_reparent(
+        &self,
+        prepared: PreparedCompositionRootHost,
+    ) -> Result<PreparedCompositionRootHost, WebSurfaceError> {
+        self.desktop_target
+            .SetRoot(None::<&Visual>)
+            .map_err(platform(
+                "DesktopWindowTarget::SetRoot (detach reparent source)",
+            ))?;
+        if let Err(error) = prepared.desktop_target.SetRoot(&self.root_visual) {
+            drop(prepared);
+            if let Err(restore_error) = self.restore_current_target() {
+                return Err(WebSurfaceError::HostMigrationIndeterminate(format!(
+                    "DesktopWindowTarget::SetRoot (reparent) returned {error} after detaching the source root, and source-root restore failed: {restore_error}"
+                )));
+            }
+            return Err(platform("DesktopWindowTarget::SetRoot (reparent)")(error));
+        }
+        Ok(prepared)
+    }
+
+    /// Commit a prepared target after the WebView2 controller has moved.
+    /// Replacing the field drops the old target only at this commit point.
+    fn commit_reparent(&mut self, prepared: PreparedCompositionRootHost) {
+        self.desktop_target = prepared.desktop_target;
+        self.parent_hwnd = prepared.parent_hwnd;
+    }
+
+    /// Reassert this root on its currently committed target after the
+    /// destination candidate has been dropped.
+    fn restore_current_target(&self) -> Result<(), WebSurfaceError> {
+        self.desktop_target
+            .SetRoot(&self.root_visual)
+            .map_err(platform("DesktopWindowTarget::SetRoot (restore reparent)"))
+    }
+}
+
+struct PreparedCompositionRootHost {
+    parent_hwnd: HWND,
+    desktop_target: windows::UI::Composition::Desktop::DesktopWindowTarget,
+}
+
+fn host_hwnd(parent_hwnd: *mut std::ffi::c_void) -> Result<HWND, WebSurfaceError> {
+    if parent_hwnd.is_null() {
+        return Err(WebSurfaceError::Platform(
+            "parent HWND was null".to_string(),
+        ));
+    }
+    Ok(HWND(parent_hwnd))
 }
 
 /// A top-level off-screen window owned by a capture-only [`CompositionRoot`].
@@ -453,6 +532,124 @@ impl WebView2CompositionProducer {
             accelerator_key_pressed_token,
             cursor_changed_token,
         })
+    }
+
+    /// Move this producer to `parent_hwnd` without recreating the WebView2
+    /// controller, page, profile, or D3D capture device.
+    ///
+    /// A producer constructed with [`Self::new_attached`] deliberately shares
+    /// its composition root with sibling producers and cannot be migrated by
+    /// itself. This method rejects that shape instead of moving unrelated
+    /// panes. Construct a standalone producer with [`Self::new`] for a
+    /// movable native host.
+    ///
+    /// The Windows Graphics Capture session is restarted because its capture
+    /// item is tied to the composition visual's destination. The next
+    /// `try_acquire_frame` starts it again; the existing shared-device factory
+    /// and the imported-resource contract are retained.
+    ///
+    /// # Safety
+    ///
+    /// `parent_hwnd` must be a live top-level HWND on this producer's UI
+    /// thread and must outlive the producer or a later successful migration.
+    pub unsafe fn reparent_to_hwnd(
+        &mut self,
+        parent_hwnd: *mut std::ffi::c_void,
+    ) -> Result<(), WebSurfaceError> {
+        let parent_hwnd = host_hwnd(parent_hwnd)?;
+        if parent_hwnd == self.parent_hwnd {
+            return Ok(());
+        }
+
+        let old_parent_hwnd = self.parent_hwnd;
+        let controller = self.controller.clone();
+        let composition_root = Arc::get_mut(&mut self.composition_root).ok_or_else(|| {
+            WebSurfaceError::Unsupported(
+                "cannot reparent a WebView2 producer attached to a shared CompositionRoot",
+            )
+        })?;
+
+        // Create the destination target first, then explicitly move the root
+        // visual off its source target. WinComp does not permit a visual to be
+        // root of both targets at once. `activate_prepared_reparent` restores
+        // the source before it returns an ordinary error.
+        let prepared = unsafe { composition_root.prepare_reparent_to_hwnd(parent_hwnd.0) }?;
+        let prepared = composition_root.activate_prepared_reparent(prepared)?;
+        match unsafe { controller.SetParentWindow(parent_hwnd) } {
+            Ok(()) => composition_root.commit_reparent(prepared),
+            Err(error) => {
+                let mut observed_parent = HWND(std::ptr::null_mut());
+                match unsafe { controller.ParentWindow(&mut observed_parent) } {
+                    Ok(()) if observed_parent == old_parent_hwnd => {
+                        drop(prepared);
+                        if let Err(restore_error) = composition_root.restore_current_target() {
+                            return Err(WebSurfaceError::HostMigrationIndeterminate(format!(
+                                "controller.SetParentWindow returned {error}, source host was retained, but its composition root could not be restored: {restore_error}"
+                            )));
+                        }
+                        return Err(platform("controller.SetParentWindow")(error));
+                    }
+                    Ok(()) if observed_parent == parent_hwnd => {
+                        // The controller committed despite the failing HRESULT.
+                        // Complete the paired composition move and report the
+                        // observed host as the successful terminal state.
+                        composition_root.commit_reparent(prepared);
+                    }
+                    Ok(()) => {
+                        // Preserve the candidate target because it currently
+                        // owns the root visual. The controller's terminal host
+                        // is unknown, so neither source nor destination
+                        // custody can be reported truthfully as ordinary.
+                        composition_root.commit_reparent(prepared);
+                        self.parent_hwnd = parent_hwnd;
+                        return Err(WebSurfaceError::HostMigrationIndeterminate(format!(
+                            "controller.SetParentWindow returned {error}, then reported unexpected parent {:p} (source {:p}, destination {:p}); composition root remains on destination",
+                            observed_parent.0, old_parent_hwnd.0, parent_hwnd.0,
+                        )));
+                    }
+                    Err(observe_error) => {
+                        // As above, keep the root's known destination target
+                        // alive rather than dropping it into an unobservable
+                        // state while the controller host is unknown.
+                        composition_root.commit_reparent(prepared);
+                        self.parent_hwnd = parent_hwnd;
+                        return Err(WebSurfaceError::HostMigrationIndeterminate(format!(
+                            "controller.SetParentWindow returned {error}, and ParentWindow could not determine the terminal host: {observe_error}; composition root remains on destination",
+                        )));
+                    }
+                }
+            }
+        }
+        // `SetParentWindow` is the migration commit point. Reporting an
+        // error after it succeeds would make callers retain source custody
+        // even though the page has already moved. Position notification is
+        // only a best-effort layout refresh; WebView2 will still receive the
+        // next bounds/position update from the destination host.
+        self.parent_hwnd = parent_hwnd;
+        self.force_restart_capture();
+        if let Err(error) = unsafe { controller.NotifyParentWindowPositionChanged() } {
+            eprintln!(
+                "[producer] reparented WebView2 to {:p}, but position notification failed: {error}",
+                parent_hwnd.0
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_hwnd;
+
+    #[test]
+    fn host_migration_rejects_a_null_hwnd() {
+        assert!(host_hwnd(std::ptr::null_mut()).is_err());
+    }
+
+    #[test]
+    fn host_migration_preserves_a_non_null_hwnd_value() {
+        let raw = 0x1234usize as *mut std::ffi::c_void;
+        assert_eq!(host_hwnd(raw).unwrap().0, raw);
     }
 }
 
