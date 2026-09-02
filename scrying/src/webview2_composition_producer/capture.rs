@@ -141,6 +141,12 @@ impl WebView2CompositionProducer {
         wgpu::TextureFormat::Bgra8Unorm
     }
 
+    /// Poll the WGC pool once without driving the host message loop.
+    ///
+    /// This is the redraw-path API for externally-driven loops such as winit:
+    /// `Ok(None)` means a frame has not arrived yet. Call
+    /// [`Self::acquire_frame_with_timeout`] only when the caller explicitly
+    /// owns a bounded wait for a first frame.
     pub fn try_acquire_frame(
         &mut self,
     ) -> Result<Option<WebView2CompositionFrame>, WebSurfaceError> {
@@ -155,58 +161,34 @@ impl WebView2CompositionProducer {
         if needs_nudge {
             let _ = self.nudge_content(FIRST_FRAME_NUDGE_LABEL);
         }
-        let first_frame_deadline = if needs_nudge {
-            Some(Instant::now() + Duration::from_millis(500))
-        } else {
-            None
-        };
-        let block_started = Instant::now();
-        loop {
+
+        // `try_acquire_frame` runs from a host-owned event loop (usually
+        // winit's redraw path). Pumping messages here can re-enter that loop;
+        // the demo observed an intermittent hang on the initial acquire as a
+        // result. The bounded `acquire_frame_with_timeout` API owns its own
+        // pump for callers that explicitly need to wait for a first frame.
+        let frame = {
             let state = self
                 .capture_state
                 .as_mut()
                 .expect("capture state populated above");
             if !state.frame_ready() {
-                match first_frame_deadline {
-                    Some(deadline) if Instant::now() < deadline => {
-                        pump_messages_for(Duration::from_millis(16));
-                        continue;
-                    }
-                    Some(_) => {
-                        eprintln!(
-                            "[producer] first-frame block: TIMED OUT after {}ms",
-                            block_started.elapsed().as_millis()
-                        );
-                        return Ok(None);
-                    }
-                    None => return Ok(None),
-                }
+                return Ok(None);
             }
-            match state.pool.TryGetNextFrame() {
-                Ok(frame) => match self.capture_frame_to_shared(frame)? {
-                    Some(frame) => return Ok(Some(frame)),
-                    None if first_frame_deadline.is_some() => {
-                        pump_messages_for(Duration::from_millis(16));
-                    }
-                    None => return Ok(None),
-                },
-                Err(_) => match first_frame_deadline {
-                    Some(deadline) if Instant::now() < deadline => {
-                        pump_messages_for(Duration::from_millis(16));
-                    }
-                    Some(_) => {
-                        eprintln!(
-                            "[producer] first-frame block: TIMED OUT after {}ms",
-                            block_started.elapsed().as_millis()
-                        );
-                        return Ok(None);
-                    }
-                    None => return Ok(None),
-                },
-            }
+            state.pool.TryGetNextFrame()
+        };
+
+        match frame {
+            Ok(frame) => self.capture_frame_to_shared(frame),
+            Err(_) => Ok(None),
         }
     }
 
+    /// Wait for a frame while pumping this thread's Windows messages.
+    ///
+    /// Unlike [`Self::try_acquire_frame`], this is a bounded, caller-explicit
+    /// operation. It is suitable for setup and diagnostics, not a winit redraw
+    /// callback.
     pub fn acquire_frame_with_timeout(
         &mut self,
         timeout: Duration,
@@ -369,7 +351,6 @@ impl WebView2CompositionProducer {
                 "Windows.Graphics.Capture is not supported in this session",
             ));
         }
-        std::thread::sleep(Duration::from_millis(500));
         let visual: Visual = self
             .webview_visual
             .cast()
