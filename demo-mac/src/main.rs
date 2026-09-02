@@ -3898,7 +3898,10 @@ impl AppState {
             CaptureTestState {
                 frame_dims: Vec::new(),
                 expected_dims,
-                frames_per_size: if cli.resize_test { 3 } else { 5 },
+                // ScreenCaptureKit may stop producing samples once a static
+                // page settles. Three frames still rejects a one-off stale
+                // transition while remaining independent of page motion.
+                frames_per_size: 3,
                 capture_started_at: None,
                 live_started_at: None,
                 failures: Vec::new(),

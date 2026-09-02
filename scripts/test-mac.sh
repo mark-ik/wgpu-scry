@@ -104,6 +104,17 @@ stop_demo_app() {
     done < <(ps -ax -o pid= -o command=)
     return 0
 }
+
+demo_app_running() {
+    [[ -n "$DEMO_APP" ]] || return 1
+    app_executable="$DEMO_APP/Contents/MacOS/demo-mac"
+    while read -r _pid command; do
+        if [[ "$command" = *"$app_executable"* ]]; then
+            return 0
+        fi
+    done < <(ps -ax -o pid= -o command=)
+    return 1
+}
 trap stop_demo_app EXIT
 
 run_mode() {
@@ -116,7 +127,7 @@ run_mode() {
     fi
 
     : >"$log"
-    open_args=(-W -n -F --stdout "$log" --stderr "$log")
+    open_args=(-n -F --stdout "$log" --stderr "$log")
     data_root="${SCRY_DEMO_DATA_ROOT:-${CARGO_TARGET_DIR:-$PWD/target}}"
     if [[ "$data_root" != /* ]]; then
         data_root="$PWD/$data_root"
@@ -131,13 +142,40 @@ run_mode() {
                 ;;
         esac
     done
-    perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
-        open "${open_args[@]}" "$DEMO_APP" --args "$@"
+    stop_demo_app
+    open "${open_args[@]}" "$DEMO_APP" --args "$@"
     rc=$?
     if [[ $rc -ne 0 ]]; then
         stop_demo_app
+        return $rc
     fi
-    return $rc
+
+    # `open -W` is not reliable on every self-hosted macOS release: the app
+    # can launch successfully while LaunchServices reports that it could not
+    # obtain a PID. Poll the exact bundle executable and its receipt instead.
+    # A completed mode always writes PASS or FAIL before exiting.
+    deadline=$((SECONDS + TIMEOUT))
+    launch_deadline=$((SECONDS + 5))
+    saw_process=0
+    while [[ $SECONDS -lt $deadline ]]; do
+        if grep -Eq 'demo-mac: .*: (PASS|FAIL)' "$log"; then
+            stop_demo_app
+            return 0
+        fi
+        if demo_app_running; then
+            saw_process=1
+        elif [[ $saw_process -eq 1 ]]; then
+            return 0
+        elif [[ $SECONDS -ge $launch_deadline && -s "$log" ]]; then
+            # A very short-lived process can fall between polls. Its complete
+            # redirected output is still enough for the caller to judge the
+            # required PASS receipt.
+            return 0
+        fi
+        sleep 0.1
+    done
+    stop_demo_app
+    return 142
 }
 
 passed=0
