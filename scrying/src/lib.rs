@@ -401,6 +401,11 @@ pub enum WebSurfaceError {
     NotReady(&'static str),
     #[error(transparent)]
     Interop(#[from] InteropError),
+    /// A native-host migration reached a state whose owner could not be
+    /// determined. The producer must not be treated as remaining at its
+    /// source host.
+    #[error("native host migration is indeterminate: {0}")]
+    HostMigrationIndeterminate(String),
     #[error("platform capture failed: {0}")]
     Platform(String),
 }
@@ -1270,6 +1275,28 @@ pub trait WebSurfaceProducer {
         Ok(())
     }
 
+    /// Move this producer's native host binding to `parent_hwnd` while
+    /// retaining its current page and browser session.
+    ///
+    /// This is presently implemented only by the Windows WebView2 composition
+    /// producer. The caller must keep the destination top-level HWND alive for
+    /// the rest of the producer's lifetime and call from the producer's UI
+    /// thread. Other backends return [`WebSurfaceError::Unsupported`].
+    ///
+    /// # Safety
+    ///
+    /// `parent_hwnd` must be a live top-level native window handle on the
+    /// producer's UI thread.
+    unsafe fn reparent_to_hwnd(
+        &mut self,
+        parent_hwnd: *mut std::ffi::c_void,
+    ) -> Result<(), WebSurfaceError> {
+        let _ = parent_hwnd;
+        Err(WebSurfaceError::Unsupported(
+            "WebSurfaceProducer::reparent_to_hwnd is only implemented by the Windows WebView2 composition producer",
+        ))
+    }
+
     /// Begin a non-blocking inline-HTML navigation. Completion is observed via
     /// [`Self::poll_navigation_event`].
     fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
@@ -1609,5 +1636,21 @@ mod tests {
                 crate::native_frame::UnsupportedReason::HostBackendUnavailable,
             )
         );
+    }
+
+    #[test]
+    fn default_host_migration_is_explicitly_unsupported() {
+        let mut producer = OverlayOnlyProducer::new(probe_webview2(None));
+        let result = unsafe { producer.reparent_to_hwnd(0x1234usize as *mut _) };
+        assert!(matches!(result, Err(WebSurfaceError::Unsupported(_))));
+    }
+
+    #[test]
+    fn indeterminate_host_migration_has_a_distinct_terminal_error() {
+        let error = WebSurfaceError::HostMigrationIndeterminate("unknown native host".into());
+        assert!(matches!(
+            error,
+            WebSurfaceError::HostMigrationIndeterminate(_)
+        ));
     }
 }
