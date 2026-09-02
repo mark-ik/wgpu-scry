@@ -91,6 +91,18 @@ if [[ "$(uname -s)" = "Darwin" && "${VISIBLE:-0}" = "1" ]]; then
     plutil -insert CFBundleShortVersionString -string 0.7.0 "$plist"
     plutil -insert CFBundleVersion -string 1 "$plist"
     plutil -insert NSHighResolutionCapable -bool true "$plist"
+    requirement_file="${TMPDIR:-/tmp}/scry-hardware-requirement-$$.req"
+    printf '%s\n' 'designated => identifier "org.merely.scry.hardware-demo"' >"$requirement_file"
+    if ! codesign --force --sign - \
+        --identifier org.merely.scry.hardware-demo \
+        --requirements "$requirement_file" \
+        "$DEMO_APP"
+    then
+        rm -f "$requirement_file"
+        exit 1
+    fi
+    rm -f "$requirement_file"
+    codesign --verify --deep --strict "$DEMO_APP"
     echo "==> LaunchServices app: $DEMO_APP"
 fi
 

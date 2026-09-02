@@ -305,6 +305,19 @@ fn browser_test_scheme_handler() -> UrlSchemeHandlerFn {
               }
             </script>
             </body>"#
+        } else if url.contains("/capture") {
+            // ScreenCaptureKit suppresses samples once a static page settles.
+            // Keep this local fixture repainting so the capture gate measures
+            // frame delivery rather than incidental motion on a network page.
+            r#"<!doctype html>
+            <html><head><style>
+              html, body { margin: 0; width: 100vw; height: 100vh; }
+              body { animation: scry-capture-pulse 240ms steps(1, end) infinite; }
+              @keyframes scry-capture-pulse {
+                0% { background: rgb(23, 97, 181); }
+                50% { background: rgb(221, 79, 54); }
+              }
+            </style></head><body></body></html>"#
         } else if url.contains("/download") {
             // Download-test payload. `Content-Disposition: attachment`
             // is the canonical signal that promotes the navigation
@@ -3756,6 +3769,7 @@ impl AppState {
             || cli.pointer_input_test
             || cli.download_test
             || cli.two_tabs
+            || cli.capture_test
         {
             vec![("scrying-test".to_string(), browser_test_scheme_handler())]
         } else {
@@ -3771,8 +3785,9 @@ impl AppState {
 
         // Scripted mode loads its own offline test page once the
         // event loop is running (in `advance_scripted`); for
-        // everything else, kick off the initial network navigation
-        // here. We use `load_url` (non-blocking) rather than
+        // capture-test uses a repainting local page so ScreenCaptureKit keeps
+        // delivering samples; everything else kicks off the initial network
+        // navigation here. We use `load_url` (non-blocking) rather than
         // `navigate_to_url` (blocking) because we're inside winit's
         // `resumed` callback and the blocking variant would pump the
         // main `NSRunLoop` and re-enter winit's event handler (which
@@ -3788,10 +3803,15 @@ impl AppState {
             && !cli.incognito_test
             && !cli.download_test
         {
-            if let Err(error) = producer.load_url(INITIAL_URL) {
+            let initial_url = if cli.capture_test {
+                "scrying-test://capture"
+            } else {
+                INITIAL_URL
+            };
+            if let Err(error) = producer.load_url(initial_url) {
                 eprintln!("demo-mac: initial load_url failed: {error}");
             } else {
-                println!("demo-mac: started loading {INITIAL_URL}");
+                println!("demo-mac: started loading {initial_url}");
             }
         }
 
@@ -3898,10 +3918,7 @@ impl AppState {
             CaptureTestState {
                 frame_dims: Vec::new(),
                 expected_dims,
-                // ScreenCaptureKit may stop producing samples once a static
-                // page settles. Three frames still rejects a one-off stale
-                // transition while remaining independent of page motion.
-                frames_per_size: 3,
+                frames_per_size: if cli.resize_test { 3 } else { 5 },
                 capture_started_at: None,
                 live_started_at: None,
                 failures: Vec::new(),
