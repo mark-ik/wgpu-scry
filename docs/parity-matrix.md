@@ -54,8 +54,10 @@ a ScreenCaptureKit → `IOSurfaceRef` → `MTLTexture` path for live
 composited frames (`ImportedTexture` tier). The SCK path needs the
 Screen Recording privacy permission. Headed hardware runs wrap the demo in
 the stable `org.merely.scry.hardware-demo` app bundle and require a persistent
-Developer ID/Apple Development signing identity (or
-`SCRY_MAC_CODESIGN_IDENTITY`) so that permission survives rebuilds. See
+designated requirement so that permission survives rebuilds. The hardware
+script uses a runner-safe ad-hoc signature by default; a provisioned Developer
+ID/Apple Development identity can be selected with
+`SCRY_MAC_CODESIGN_IDENTITY`. See
 [`wkwebview_producer/mod.rs`](../scrying/src/wkwebview_producer/mod.rs).
 
 [^wpe-dcc]: The wgpu 30 path is pixel-verified on AMD Renoir/RADV with

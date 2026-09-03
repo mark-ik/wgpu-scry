@@ -26,8 +26,10 @@
 #
 # ScreenCaptureKit is intentionally a separate hardware suite because macOS
 # must grant Screen Recording permission to the generated app ahead of time.
-# The app is signed with SCRY_MAC_CODESIGN_IDENTITY, or the first available
-# Developer ID/Apple Development identity, so the grant survives rebuilds:
+# By default the app is ad-hoc signed with an explicit stable designated
+# requirement, so the grant survives rebuilds without giving a background
+# runner access to a private signing key. Set SCRY_MAC_CODESIGN_IDENTITY to use
+# a provisioned Developer ID/Apple Development identity instead:
 #     CAPTURE=1 bash scripts/test-mac.sh
 # Self-hosted hardware runners should also make the AppKit tests visible. This
 # makes the script wrap the built binary in a stable .app and use
@@ -93,29 +95,19 @@ if [[ "$(uname -s)" = "Darwin" && "${VISIBLE:-0}" = "1" ]]; then
     plutil -insert CFBundleShortVersionString -string 0.7.0 "$plist"
     plutil -insert CFBundleVersion -string 1 "$plist"
     plutil -insert NSHighResolutionCapable -bool true "$plist"
-    codesign_identity="${SCRY_MAC_CODESIGN_IDENTITY:-}"
-    if [[ -z "$codesign_identity" ]]; then
-        codesign_identity="$({
-            security find-identity -v -p codesigning 2>/dev/null || true
-        } | awk '/"Developer ID Application:/{print $2; exit}')"
+    codesign_identity="${SCRY_MAC_CODESIGN_IDENTITY:--}"
+    codesign_args=(
+        --force
+        --sign "$codesign_identity"
+        --identifier org.merely.scry.hardware-demo
+        --timestamp=none
+    )
+    if [[ "$codesign_identity" = "-" ]]; then
+        codesign_args+=(
+            --requirements '=designated => identifier "org.merely.scry.hardware-demo"'
+        )
     fi
-    if [[ -z "$codesign_identity" ]]; then
-        codesign_identity="$({
-            security find-identity -v -p codesigning 2>/dev/null || true
-        } | awk '/"Apple Development:/{print $2; exit}')"
-    fi
-    if [[ -z "$codesign_identity" && "${CAPTURE:-0}" = "1" ]]; then
-        echo "ScreenCaptureKit hardware runs require a persistent code-signing identity." >&2
-        echo "Set SCRY_MAC_CODESIGN_IDENTITY or install a Developer ID/Apple Development identity." >&2
-        exit 1
-    fi
-    if [[ -z "$codesign_identity" ]]; then
-        codesign_identity="-"
-    fi
-    if ! codesign --force --sign "$codesign_identity" \
-        --identifier org.merely.scry.hardware-demo \
-        --timestamp=none \
-        "$DEMO_APP"
+    if ! codesign "${codesign_args[@]}" "$DEMO_APP"
     then
         exit 1
     fi
