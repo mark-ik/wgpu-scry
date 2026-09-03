@@ -1,3 +1,9 @@
+// Copyright 2026 Mark Alan Boykin
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
 //! Interactive multi-pane diagnostic for the bridge-months question: "does
 //! real user keyboard work when scrying hosts multiple WebViews under one OS
 //! window?" Plan 2 / Phase A: N producers share one `CompositionRoot` (one

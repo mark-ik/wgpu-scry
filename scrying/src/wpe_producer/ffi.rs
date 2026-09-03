@@ -1,3 +1,9 @@
+// Copyright 2026 Mark Alan Boykin
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
 //! Hand-written `extern "C"` declarations for WPE-specific symbols in
 //! libWPEWebKit-2.0.so. GObject-generic operations (ref/unref, signal
 //! connect, type checks, `g_object_new`) use the `glib` crate's low-level

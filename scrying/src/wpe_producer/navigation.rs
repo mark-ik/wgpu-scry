@@ -1,3 +1,9 @@
+// Copyright 2026 Mark Alan Boykin
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
 //! Navigation: `load_uri` / `load_html` with main-loop-pumped completion
 //! waits. Direct port of `webkitgtk_producer/navigation.rs` — same
 //! `WebKitLoadEvent` enum + `load-changed`/`load-failed` signals on the

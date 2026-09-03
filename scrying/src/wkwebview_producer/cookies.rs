@@ -1,3 +1,9 @@
+// Copyright 2026 Mark Alan Boykin
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
 //! `NSHTTPCookie` ↔ [`Cookie`] translation helpers used by the
 //! producer's cookie-store API (`request_all_cookies` / `set_cookie`
 //! / `delete_cookie`). Pure functions — no producer state.

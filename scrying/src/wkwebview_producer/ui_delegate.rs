@@ -1,3 +1,9 @@
+// Copyright 2026 Mark Alan Boykin
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
+
 //! `WKUIDelegate` implementation. Routes engine-level popups (item 2:
 //! `NewWindowRequested`) into the producer's nav-event FIFO and
 //! consults a host-registered permission handler for camera /
