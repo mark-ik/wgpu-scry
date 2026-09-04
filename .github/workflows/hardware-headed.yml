@@ -116,3 +116,18 @@ jobs:
           cargo test --locked -p scrying --features wpe
           --test wpe_to_vulkan_roundtrip --
           --ignored --nocapture --test-threads=1
+
+      - name: Run WPE page-side input gate
+        run: |
+          set -o pipefail
+          log_file="$(mktemp)"
+          trap 'rm -f "$log_file"' EXIT
+          if ! cargo test --locked -p scrying --features wpe \
+            --test wpe_input -- --ignored --nocapture --test-threads=1 \
+            2>&1 | tee "$log_file"; then
+            exit 1
+          fi
+          if grep -q 'SKIP:' "$log_file"; then
+            echo 'WPE page-side input gate emitted SKIP; hardware prerequisites were expected to be present.'
+            exit 1
+          fi

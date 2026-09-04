@@ -10,11 +10,11 @@
 //! smoke and the wpe_to_vulkan_roundtrip smoke) so it has its own
 //! WebKit init, honoring the one-WPE-per-process discipline.
 //!
-//! Constructs a WpeProducer, navigates to a page with an `<input>`,
-//! dispatches a sequence of keyboard / pointer / mouse-button / scroll
-//! events, and asserts the renderer keeps producing frames. Does NOT
-//! assert "the page received the events correctly" — that requires JS
-//! message-back wiring (4c.5).
+//! Constructs a WpeProducer, navigates to a page with an `<input>` and
+//! page-side event listeners, dispatches a sequence of keyboard / pointer /
+//! mouse-button / scroll events, and requires page-side pointer receipts
+//! through the JS message bridge. It also keeps the script-message and
+//! cookie round trips below as independent assertions.
 //!
 //! Run with:
 //!   cargo test -p scrying --features wpe --test wpe_input \
@@ -31,7 +31,7 @@ use scrying::{
 
 #[test]
 #[ignore = "needs a headless WPE display (GPU + Wayland); run manually"]
-fn input_dispatch_does_not_crash() {
+fn input_dispatch_reaches_page() {
     // --- 1. Stand up the producer ---
     let config = WpeProducerConfig::new(PhysicalSize::new(256, 256), std::env::temp_dir());
     let mut producer = match WpeProducer::new(config) {
@@ -43,15 +43,31 @@ fn input_dispatch_does_not_crash() {
     };
 
     // --- 2. Navigate to a page with a focusable <input> ---
-    if let Err(e) = producer.navigate_to_string(
-        "<body style='margin:0;background:#1e90ff'>\
-         <input id='probe' style='font-size:32px' autofocus>\
-         </body>",
-        std::time::Duration::from_secs(5),
-    ) {
-        eprintln!("SKIP: navigate_to_string failed: {e}");
-        return;
-    }
+    producer
+        .navigate_to_string(
+            "<body style='margin:0;background:#1e90ff'>\
+             <script>\
+             (function() {\
+                 function report(kind, event) {\
+                     var x = event && typeof event.clientX === 'number' ? Math.round(event.clientX) : -1;\
+                     var y = event && typeof event.clientY === 'number' ? Math.round(event.clientY) : -1;\
+                     window.chrome.webview.postMessage('wpe-input:' + kind + ':' + x + ':' + y);\
+                 }\
+                 document.addEventListener('pointermove', function(e) { report('move', e); }, true);\
+                 document.addEventListener('mousemove', function(e) { report('move', e); }, true);\
+                 document.addEventListener('pointerdown', function(e) { report('down', e); }, true);\
+                 document.addEventListener('mousedown', function(e) { report('down', e); }, true);\
+                 document.addEventListener('pointerup', function(e) { report('up', e); }, true);\
+                 document.addEventListener('mouseup', function(e) { report('up', e); }, true);\
+                 document.addEventListener('wheel', function(e) { report('scroll', e); }, true);\
+                 window.chrome.webview.postMessage('wpe-input:ready');\
+             })();\
+             </script>\
+             <input id='probe' style='font-size:32px' autofocus>\
+             </body>",
+            std::time::Duration::from_secs(5),
+        )
+        .expect("navigate_to_string for pointer receipt page");
     let mut saw_completed = false;
     while let Some(e) = producer.poll_navigation_event() {
         if matches!(e, NavigationEvent::Completed { success: true, .. }) {
@@ -59,6 +75,10 @@ fn input_dispatch_does_not_crash() {
         }
     }
     assert!(saw_completed, "expected a successful Completed nav event");
+
+    let ready = wait_for_message_prefix(&producer, "wpe-input:ready");
+    assert_eq!(ready, "wpe-input:ready", "pointer probe did not initialize");
+    eprintln!("input smoke: page-side pointer listeners ready");
 
     // --- 3. Wait for the first frame so we know rendering's alive ---
     let first = acquire_with_pump(&mut producer);
@@ -79,6 +99,8 @@ fn input_dispatch_does_not_crash() {
     producer
         .send_pointer_input(make_pointer(PointerEventKind::Update, cx, cy))
         .expect("send_pointer_input move");
+    let move_receipt = wait_for_input_receipt(&producer, "move");
+    eprintln!("input smoke: page received pointer move: {move_receipt}");
 
     // Mouse click (down + up) at center.
     producer
@@ -89,6 +111,8 @@ fn input_dispatch_does_not_crash() {
             point: (cx, cy),
         })
         .expect("send_mouse_input down");
+    let down_receipt = wait_for_input_receipt(&producer, "down");
+    eprintln!("input smoke: page received button down: {down_receipt}");
     producer
         .send_mouse_input(MouseInput {
             kind: MouseEventKind::LeftButtonUp,
@@ -97,6 +121,8 @@ fn input_dispatch_does_not_crash() {
             point: (cx, cy),
         })
         .expect("send_mouse_input up");
+    let up_receipt = wait_for_input_receipt(&producer, "up");
+    eprintln!("input smoke: page received button up: {up_receipt}");
 
     // Type three keys (xkb keycodes for 'w'=25, 'p'=33, 'e'=26 on the
     // standard Linux USB-HID xkb layout — these MVP-dispatch with
@@ -119,6 +145,8 @@ fn input_dispatch_does_not_crash() {
             point: (cx, cy),
         })
         .expect("send_mouse_input wheel");
+    let scroll_receipt = wait_for_input_receipt(&producer, "scroll");
+    eprintln!("input smoke: page received scroll: {scroll_receipt}");
 
     // --- 4c.4.1 — touch dispatch is NOT exercised here ---
     //
@@ -222,13 +250,9 @@ fn input_dispatch_does_not_crash() {
 
     // --- 5. Verify the renderer is still alive after the input sequence ---
     //
-    // EMPIRICAL: WPE may or may not auto-paint just from these input events.
-    // If `acquire_with_pump` times out trying to find a NEW frame, fall
-    // back to acquiring whatever frame is queued (which may be the same
-    // as the first frame) or even re-using the first-frame proof. The
-    // contract this smoke holds is "input dispatch is FFI-sound + the
-    // producer doesn't crash"; "events visibly affected the page" is
-    // out of scope per the spec.
+    // Page-side receipts above are the authoritative input assertion. WPE
+    // may or may not auto-paint from these events, so a missing *new* frame
+    // remains diagnostic rather than a substitute for the receipt gate.
     let second = acquire_with_pump_or_skip(&mut producer);
     match &second {
         Some(WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img))) => {
@@ -290,6 +314,30 @@ fn acquire_with_pump(producer: &mut WpeProducer) -> WebSurfaceFrame {
             Err(e) => panic!("FAIL: acquire_frame timed out: {e}"),
         }
     }
+}
+
+/// Pump until a page-side message with `prefix` arrives. Pointer receipts are
+/// deliberately a hard assertion: dispatching an event without observing it
+/// in the document is not an input-forwarding proof.
+fn wait_for_message_prefix(producer: &WpeProducer, prefix: &str) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            panic!("FAIL: timed out waiting for page-side message with prefix {prefix:?}");
+        }
+        let Some(message) = producer.wait_for_web_message(remaining) else {
+            panic!("FAIL: timed out waiting for page-side message with prefix {prefix:?}");
+        };
+        if message.starts_with(prefix) {
+            return message;
+        }
+        eprintln!("input smoke: ignoring unrelated page message {message:?}");
+    }
+}
+
+fn wait_for_input_receipt(producer: &WpeProducer, kind: &str) -> String {
+    wait_for_message_prefix(producer, &format!("wpe-input:{kind}:"))
 }
 
 /// Like `acquire_with_pump` but with a SHORTER (2s) deadline and `None`
