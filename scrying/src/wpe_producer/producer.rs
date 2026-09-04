@@ -660,17 +660,6 @@ mod fd_tests {
     use crate::native_frame::{DmaBufImage, DmaBufPlane, SyncMechanism};
     use std::os::fd::{FromRawFd, OwnedFd};
 
-    // Serialize all fd tests so parallel test threads don't recycle fd
-    // numbers between the close-under-test and the fd_open assertion.
-    static FD_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-
-    fn fd_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        FD_TEST_LOCK
-            .get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
     /// Open a one-shot pipe fd we can watch for closure. Closes the write
     /// end so only the read end is observable.
     fn pipe_fd() -> i32 {
@@ -703,7 +692,7 @@ mod fd_tests {
 
     #[test]
     fn evicting_stale_frame_closes_its_fds() {
-        let _guard = fd_test_lock();
+        let _fd_lock = crate::lock_fd_table();
         let sink = FrameSink {
             pending: Arc::new(Mutex::new(None)),
             generation: Arc::new(AtomicU64::new(0)),
@@ -727,7 +716,7 @@ mod fd_tests {
     #[cfg(not(feature = "wpe"))]
     #[test]
     fn dropping_producer_closes_unconsumed_fd() {
-        let _guard = fd_test_lock();
+        let _fd_lock = crate::lock_fd_table();
         use crate::wpe_producer::WpeProducerConfig;
         let leftover_fd = pipe_fd();
         {

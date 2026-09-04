@@ -813,6 +813,7 @@ mod tests {
     fn dmabuf_frame_reports_kind_and_sync() {
         use std::os::fd::FromRawFd;
 
+        let _fd_lock = crate::lock_fd_table();
         let mut fds = [0; 2];
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
         unsafe { libc::close(fds[1]) };

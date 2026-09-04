@@ -306,6 +306,7 @@ mod ownership_tests {
 
     #[test]
     fn repeated_plane_index_uses_one_owner_and_closes_on_drop() {
+        let _fd_lock = crate::lock_fd_table();
         let fd = pipe_fd();
         let image = DmaBufImage::from_owned_buffers(
             dpi::PhysicalSize::new(4, 4),
@@ -326,6 +327,7 @@ mod ownership_tests {
 
     #[test]
     fn distinct_dup_fds_keep_distinct_owners() {
+        let _fd_lock = crate::lock_fd_table();
         let fd = pipe_fd();
         let dup_fd = unsafe { libc::dup(fd) };
         assert!(dup_fd >= 0);
@@ -349,6 +351,7 @@ mod ownership_tests {
 
     #[test]
     fn validation_failure_closes_valid_descriptors() {
+        let _fd_lock = crate::lock_fd_table();
         let fd = pipe_fd();
         let result = DmaBufImage::from_owned_buffers(
             dpi::PhysicalSize::new(4, 4),
@@ -367,6 +370,7 @@ mod ownership_tests {
 
     #[test]
     fn raw_constructor_error_closes_all_valid_descriptors() {
+        let _fd_lock = crate::lock_fd_table();
         let first = pipe_fd();
         let second = pipe_fd();
         let result = unsafe {

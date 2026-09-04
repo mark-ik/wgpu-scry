@@ -346,6 +346,7 @@ mod tests {
 
     #[test]
     fn partial_duplicate_failure_closes_earlier_descriptors() {
+        let _fd_lock = crate::lock_fd_table();
         let mut source = [0; 2];
         assert_eq!(unsafe { libc::pipe(source.as_mut_ptr()) }, 0);
         let first_duplicate = Cell::new(-1);
