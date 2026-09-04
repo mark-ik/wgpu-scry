@@ -3483,6 +3483,7 @@ dependencies = [
  "foreign-types-shared",
  "gbm",
  "gdk",
+ "gio 0.18.4",
  "glib 0.18.5",
  "grafting",
  "gsk4",
