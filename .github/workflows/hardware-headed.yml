@@ -37,9 +37,17 @@ jobs:
       WGPU_BACKEND: dx12
 
     steps:
-      - name: Serialize host hardware use
-        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@781aa6aad3f63b83ad48b192a6a5d078be1d71b8
       - uses: actions/checkout@v4
+      - name: Fetch the shared host hardware lock
+        uses: actions/checkout@v4
+        with:
+          repository: merely-made/wgpu-graft
+          ref: 781aa6aad3f63b83ad48b192a6a5d078be1d71b8
+          path: .host-hardware-lock
+          sparse-checkout: .github/actions/host-hardware-lock
+          sparse-checkout-cone-mode: false
+      - name: Serialize host hardware use
+        uses: ./.host-hardware-lock/.github/actions/host-hardware-lock
 
       - name: Assert the provisioned toolchain and adapter
         shell: powershell
@@ -67,9 +75,17 @@ jobs:
       VISIBLE: "1"
 
     steps:
-      - name: Serialize host hardware use
-        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@781aa6aad3f63b83ad48b192a6a5d078be1d71b8
       - uses: actions/checkout@v4
+      - name: Fetch the shared host hardware lock
+        uses: actions/checkout@v4
+        with:
+          repository: merely-made/wgpu-graft
+          ref: 781aa6aad3f63b83ad48b192a6a5d078be1d71b8
+          path: .host-hardware-lock
+          sparse-checkout: .github/actions/host-hardware-lock
+          sparse-checkout-cone-mode: false
+      - name: Serialize host hardware use
+        uses: ./.host-hardware-lock/.github/actions/host-hardware-lock
       - uses: dtolnay/rust-toolchain@1.97.1
       - name: Run WKWebView assertions including live capture and resize
         run: bash scripts/test-mac.sh
@@ -85,9 +101,17 @@ jobs:
       VISIBLE: "1"
 
     steps:
-      - name: Serialize host hardware use
-        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@781aa6aad3f63b83ad48b192a6a5d078be1d71b8
       - uses: actions/checkout@v4
+      - name: Fetch the shared host hardware lock
+        uses: actions/checkout@v4
+        with:
+          repository: merely-made/wgpu-graft
+          ref: 781aa6aad3f63b83ad48b192a6a5d078be1d71b8
+          path: .host-hardware-lock
+          sparse-checkout: .github/actions/host-hardware-lock
+          sparse-checkout-cone-mode: false
+      - name: Serialize host hardware use
+        uses: ./.host-hardware-lock/.github/actions/host-hardware-lock
       - uses: dtolnay/rust-toolchain@1.97.1
       - name: Run WKWebView assertions including live capture and resize
         run: bash scripts/test-mac.sh
@@ -107,9 +131,17 @@ jobs:
       WGPU_BACKEND: vulkan
 
     steps:
-      - name: Serialize host hardware use
-        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@781aa6aad3f63b83ad48b192a6a5d078be1d71b8
       - uses: actions/checkout@v4
+      - name: Fetch the shared host hardware lock
+        uses: actions/checkout@v4
+        with:
+          repository: merely-made/wgpu-graft
+          ref: 781aa6aad3f63b83ad48b192a6a5d078be1d71b8
+          path: .host-hardware-lock
+          sparse-checkout: .github/actions/host-hardware-lock
+          sparse-checkout-cone-mode: false
+      - name: Serialize host hardware use
+        uses: ./.host-hardware-lock/.github/actions/host-hardware-lock
       - uses: dtolnay/rust-toolchain@1.97.1
 
       - name: Assert the native Wayland and WPE environment
