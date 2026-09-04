@@ -31,9 +31,10 @@ use crate::{HostWgpuContext, InteropBackend, WebSurfaceError, WebSurfaceMode};
 
 use super::super::producer::WkWebViewProducer;
 use super::{
-    CaptureMetrics, CaptureState, CaptureStatus, InProgressCaptureState, LatestSample,
-    PendingCaptureSlot, SendOnly, StreamErrorDelegate, StreamOutputDelegate,
-    host_window_pixel_size, make_stream_configuration, write_pending,
+    AsyncMetalResources, CaptureMetrics, CaptureStartResources, CaptureState,
+    CaptureStateForMainThread, CaptureStatus, InProgressCaptureState, LatestSample,
+    PendingCaptureSlot, StreamErrorDelegate, StreamOutputDelegate, host_window_pixel_size,
+    make_stream_configuration, write_pending,
 };
 
 impl WkWebViewProducer {
@@ -80,12 +81,10 @@ impl WkWebViewProducer {
             )));
         }
 
-        let metal_device: Retained<ProtocolObject<dyn MTLDevice>> = unsafe {
-            crate::wgpu_compat::metal_device(&host.device)
-        }
-        .ok_or_else(|| {
-            WebSurfaceError::Platform("host wgpu device is not on the Metal backend".into())
-        })?;
+        let metal_device: Retained<ProtocolObject<dyn MTLDevice>> =
+            unsafe { crate::wgpu_compat::metal_device(&host.device) }.ok_or_else(|| {
+                WebSurfaceError::Platform("host wgpu device is not on the Metal backend".into())
+            })?;
 
         let host_window = self.webview.window().ok_or_else(|| {
             WebSurfaceError::Platform(
@@ -108,8 +107,8 @@ impl WkWebViewProducer {
 
         // Allocate the command queue for the per-frame blit and
         // the shared event we'll signal from each blit's command
-        // buffer on the main thread; both ferry across to the
-        // SCK completion via `SendOnly`.
+        // buffer on the main thread. The concrete resource bundle
+        // ferries them across to SCK's completion queue.
         let command_queue = metal_device.newCommandQueue().ok_or_else(|| {
             WebSurfaceError::Platform("MTLDevice::newCommandQueue returned nil".into())
         })?;
@@ -124,9 +123,11 @@ impl WkWebViewProducer {
             PendingCaptureSlot::Starting;
 
         let pending = Arc::clone(&self.pending_capture);
-        let metal_device_for_block = SendOnly(metal_device);
-        let command_queue_for_block = SendOnly(command_queue);
-        let shared_event_for_block = SendOnly(shared_event);
+        let metal_resources = AsyncMetalResources {
+            metal_device,
+            command_queue,
+            shared_event,
+        };
         // ColorPipeline is `Copy` and trivially Send; fold it
         // into the block so SCK's background-queue completion
         // doesn't need to reach back into `self`.
@@ -231,13 +232,14 @@ impl WkWebViewProducer {
                 }
 
                 // Capture the assembled state into the inner block.
-                let metal_device = metal_device_for_block.0.clone();
-                let command_queue = command_queue_for_block.0.clone();
-                let shared_event = shared_event_for_block.0.clone();
+                let metal_device = metal_resources.metal_device.clone();
+                let command_queue = metal_resources.command_queue.clone();
+                let shared_event = metal_resources.shared_event.clone();
                 let pending_inner = Arc::clone(&pending);
                 let config_revision = Arc::new(AtomicU64::new(0));
                 let applied_config_revision = Arc::new(AtomicU64::new(0));
-                let in_progress = SendOnly(InProgressCaptureState {
+                let configuration_error = Arc::new(Mutex::new(None));
+                let in_progress = CaptureStartResources(InProgressCaptureState {
                     metal_device,
                     command_queue,
                     stream: stream.clone(),
@@ -250,6 +252,7 @@ impl WkWebViewProducer {
                     samples_consumed: Arc::clone(&samples_consumed),
                     config_revision,
                     applied_config_revision,
+                    configuration_error,
                     shared_event,
                 });
 
@@ -278,10 +281,14 @@ impl WkWebViewProducer {
                         generation: AtomicU64::new(0),
                         config_revision: Arc::clone(&parts.config_revision),
                         applied_config_revision: Arc::clone(&parts.applied_config_revision),
+                        configuration_error: Arc::clone(&parts.configuration_error),
                         shared_event: parts.shared_event.clone(),
                         next_signal_value: AtomicU64::new(0),
                     };
-                    write_pending(&pending_inner, PendingCaptureSlot::Ready(SendOnly(cap)));
+                    write_pending(
+                        &pending_inner,
+                        PendingCaptureSlot::Ready(CaptureStateForMainThread(cap)),
+                    );
                 });
                 unsafe {
                     stream.startCaptureWithCompletionHandler(Some(&inner_block));
@@ -324,7 +331,7 @@ impl WkWebViewProducer {
                 *slot = PendingCaptureSlot::Failed(msg);
                 CaptureStatus::Failed(report)
             }
-            PendingCaptureSlot::Ready(SendOnly(state)) => {
+            PendingCaptureSlot::Ready(CaptureStateForMainThread(state)) => {
                 drop(slot);
                 self.install_capture_state(state);
                 CaptureStatus::Live

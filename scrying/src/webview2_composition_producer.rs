@@ -117,8 +117,7 @@ use crate::{
 };
 
 use crate::windows_capture::{
-    D3D11SharedTexture, D3D11SharedTextureFactory, WebView2D3D11CaptureFrame,
-    WebView2DxgiSharedHandleFrame,
+    D3D11SharedTextureFactory, WebView2D3D11CaptureFrame, WebView2DxgiSharedHandleFrame,
 };
 use crate::{
     SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame, WebSurfaceMode,
@@ -195,16 +194,14 @@ pub struct WebView2CompositionConfig {
     pub navigation_timeout: Duration,
     /// Timeout for `acquire_frame` to wait on `TryGetNextFrame`.
     pub frame_timeout: Duration,
-    /// Optional NT shared handle to a `D3D12_FENCE_FLAG_SHARED` fence
-    /// (typically from
-    /// `crate::native_frame::Dx12FenceSynchronizer::shared_handle`).
-    /// When `Some`, the producer opens the fence on its D3D11 device and
-    /// signals it after each `CopyResource` instead of using a keyed mutex
-    /// + CPU spin. Frames are then emitted with
-    /// `producer_sync = SyncMechanism::ExplicitFence` and a per-frame
-    /// `fence_value`. The consumer-side `Dx12FenceSynchronizer` owns the
-    /// canonical handle; the producer never closes it.
-    pub fence_shared_handle: Option<*mut std::ffi::c_void>,
+    /// Shared DX12 fence supplied by the host.
+    ///
+    /// Imported WebView2 frames require this fence. The producer opens it on
+    /// its D3D11 device, signals it after each copy, and emits the resulting
+    /// value with the frame. The host must retain the synchronizer and import
+    /// with it so its D3D12 queue waits before sampling. The producer borrows
+    /// this synchronizer while it exists and never closes its handle directly.
+    fence_synchronizer: Option<Arc<crate::native_frame::Dx12FenceSynchronizer>>,
 }
 
 impl WebView2CompositionConfig {
@@ -220,7 +217,7 @@ impl WebView2CompositionConfig {
             diagnostic_backdrop: None,
             navigation_timeout: Duration::from_secs(5),
             frame_timeout: Duration::from_secs(2),
-            fence_shared_handle: None,
+            fence_synchronizer: None,
         }
     }
 
@@ -247,31 +244,34 @@ impl WebView2CompositionConfig {
         self
     }
 
-    /// Enable explicit-fence sync using the shared NT handle from the
-    /// consumer's `Dx12FenceSynchronizer`. See
-    /// [`fence_shared_handle`](Self::fence_shared_handle) for semantics.
-    pub fn with_fence_shared_handle(mut self, handle: *mut std::ffi::c_void) -> Self {
-        self.fence_shared_handle = Some(handle);
+    /// Configure the required producer-to-host fence using the host's DX12
+    /// synchronizer.
+    ///
+    /// Keep `synchronizer` alive for both the producer and every imported
+    /// frame. Use it with
+    /// [`crate::native_frame::WgpuTextureImporter::with_synchronizer`] when
+    /// consuming those frames.
+    pub fn with_dx12_fence_synchronizer(
+        mut self,
+        synchronizer: Arc<crate::native_frame::Dx12FenceSynchronizer>,
+    ) -> Self {
+        self.fence_synchronizer = Some(synchronizer);
         self
     }
 }
 
 /// Captured WebView frame ready to be imported via `wgpu-native-texture-interop`.
 ///
-/// When `resource_is_new` is `true`, this frame points at a freshly allocated
-/// shared D3D11 texture that the consumer must (re-)import; the consumer owns
-/// the NT handle and is responsible for calling
-/// The returned frame owns the exported handle through its RAII custody token.
-///
-/// When `resource_is_new` is `false`, the producer reused the previous
-/// allocation: the consumer should keep its previously-imported `wgpu::Texture`
-/// (whose underlying memory was just overwritten by the producer's
-/// `CopyResource`) and ignore `shared_handle`.
+/// Every frame has a freshly allocated shared D3D11 destination texture. The
+/// returned native frame owns its exported NT handle through an RAII custody
+/// token; raw handles are deliberately not exposed. The host must import each
+/// frame while retaining the matching `Dx12FenceSynchronizer`.
 pub struct WebView2CompositionFrame {
     pub frame: WebSurfaceFrame,
     pub content_size: PhysicalSize<u32>,
     pub generation: u64,
-    pub shared_handle: *mut std::ffi::c_void,
+    /// Always `true` for this producer. Kept for source compatibility with
+    /// older consumers that conditionally reimported persistent resources.
     pub resource_is_new: bool,
 }
 
@@ -297,6 +297,7 @@ pub struct WebView2CompositionProducer {
     #[allow(dead_code)]
     parent_hwnd: HWND,
     size: PhysicalSize<u32>,
+    frame_timeout: Duration,
     /// Content-frame counter. Bumps for every emitted capture frame.
     generation: u64,
     /// Shared-resource allocation counter. Bumps only when the persistent
@@ -322,9 +323,12 @@ pub struct WebView2CompositionProducer {
     webview: ICoreWebView2,
 
     capture_factory: D3D11SharedTextureFactory,
+    /// Retains the shared fence used by the D3D11 producer. Hosts retain a
+    /// clone and give it to their `WgpuTextureImporter`.
+    #[allow(dead_code)]
+    fence_synchronizer: Arc<crate::native_frame::Dx12FenceSynchronizer>,
     capture_device: IDirect3DDevice,
     capture_state: Option<CaptureState>,
-    persistent_dest: Option<PersistentDest>,
     capture_samples_received: AtomicU64,
     capture_samples_consumed: AtomicU64,
     capture_stale_frames_dropped: AtomicU64,
@@ -360,16 +364,6 @@ pub struct WebView2CompositionProducer {
     web_resource_requested_token: Option<i64>,
     accelerator_key_pressed_token: i64,
     cursor_changed_token: i64,
-}
-
-/// A reusable shared D3D11 destination texture and its NT handle. The handle
-/// is exposed exactly once via `WebView2CompositionFrame::shared_handle` (with
-/// `resource_is_new = true`); subsequent frames reuse the same texture and
-/// signal `resource_is_new = false`.
-struct PersistentDest {
-    texture: D3D11SharedTexture,
-    size: PhysicalSize<u32>,
-    handle_handed_off: bool,
 }
 
 struct CaptureState {

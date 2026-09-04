@@ -415,10 +415,14 @@ impl WebView2CompositionProducer {
         let webview =
             unsafe { controller.CoreWebView2() }.map_err(platform("controller.CoreWebView2"))?;
 
-        let capture_factory = match config.fence_shared_handle {
-            Some(handle) => D3D11SharedTextureFactory::new_hardware_with_fence(handle)?,
-            None => D3D11SharedTextureFactory::new_hardware()?,
-        };
+        let fence_synchronizer = config.fence_synchronizer.clone().ok_or_else(|| {
+            WebSurfaceError::Unsupported(
+                "WebView2 imported textures require WebView2CompositionConfig::with_dx12_fence_synchronizer; the old keyed-mutex path cannot prove that the host GPU has finished sampling before the producer writes the next frame",
+            )
+        })?;
+        let capture_factory = D3D11SharedTextureFactory::new_hardware_with_fence(
+            fence_synchronizer.shared_handle().0 as *mut std::ffi::c_void,
+        )?;
         let capture_device = capture_factory.create_winrt_direct3d_device()?;
 
         let nav_event_queue: Arc<Mutex<VecDeque<NavigationEvent>>> =
@@ -493,6 +497,7 @@ impl WebView2CompositionProducer {
         Ok(Self {
             parent_hwnd,
             size: config.size,
+            frame_timeout: config.frame_timeout,
             generation: 0,
             resource_epoch: 0,
             composition_root: composition_root.clone(),
@@ -503,9 +508,9 @@ impl WebView2CompositionProducer {
             controller,
             webview,
             capture_factory,
+            fence_synchronizer,
             capture_device,
             capture_state: None,
-            persistent_dest: None,
             capture_samples_received: AtomicU64::new(0),
             capture_samples_consumed: AtomicU64::new(0),
             capture_stale_frames_dropped: AtomicU64::new(0),

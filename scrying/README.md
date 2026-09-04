@@ -114,7 +114,7 @@ The Windows producer ([`webview2_composition_producer::WebView2CompositionProduc
 The lower-level building blocks live in [`windows_capture`]:
 
 - `D3D11SharedTextureFactory::create_shared_texture_frame(...)` allocates an NT-handle-shareable D3D11 texture.
-- `D3D11SharedTextureFactory::copy_capture_into_existing_target(...)` writes a `Direct3D11CaptureFrame` into the persistent shared destination with proper keyed-mutex + GPU-completion synchronization.
+- `D3D11SharedTextureFactory::copy_capture_into_existing_target(...)` is the explicit-fence-only internal copy used by the composition producer. One-shot diagnostics use `copy_capture_into_shared_frame(...)`, which waits for the D3D11 copy before returning a fresh resource.
 - `capture_graphics_item_frame_once(...)` and `capture_visual_frame_once(...)` are one-shot capture helpers used by the demo's startup probes.
 - `DxgiSharedHandleBridge` wraps the `WebView2DxgiSharedHandleFrame` → `WebView2Dx12SharedFrame` → `WebSurfaceFrame::Native(NativeFrame::Dx12SharedTexture)` handoff.
 
@@ -157,24 +157,10 @@ Critical caveat for event-loop hosts: blocking entry points (`navigate_to_url`, 
 
 ## Cross-API GPU sync (Windows)
 
-The shared D3D11 destination texture is `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE` so D3D12 (via wgpu) can `OpenSharedHandle` it. We coordinate writes and reads as follows:
+The composition producer allocates a new `D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED` destination for every emitted frame. Its host must create a `Dx12FenceSynchronizer`, configure the producer with `with_dx12_fence_synchronizer`, and import using that same synchronizer.
 
-- **Producer (D3D11):** `IDXGIKeyedMutex::AcquireSync(0, 500ms)` → `CopyResource` from the WGC capture frame → spin on `ID3D11Query(D3D11_QUERY_EVENT)` to wait for GPU completion → `ReleaseSync(0)`. This guarantees that by the time the consumer reads, the producer's GPU work is fully retired.
-- **Consumer (wgpu/D3D12):** D3D12 resources opened from a keyed-mutex shared handle do **not** expose `IDXGIKeyedMutex` via `QueryInterface`, so the consumer cannot use the documented mutex path. Instead, the demo issues a throwaway `copy_texture_to_buffer` (1×1 pixel) on the imported texture before each render pass. wgpu's automatic state tracking inserts a `SHADER_RESOURCE → COPY_SRC → SHADER_RESOURCE` transition barrier, and on D3D12 that transition flushes shader caches that would otherwise hold a stale view of the externally-written shared texture.
+1. The producer copies the WGC capture output and signals the host-created `D3D12_FENCE_FLAG_SHARED` fence with a monotonic value.
+2. Before importing, the host synchronizer queues `ID3D12CommandQueue::Wait(fence, value)`.
+3. The producer never writes that destination again, so an in-flight host render cannot race the next capture copy.
 
-**Status:** working empirically — verified across 10+ minute runs and many resize cycles, with the persistent shared texture reused (one D3D11 allocation per size change, one wgpu import per size change). However, the transition-barrier cache flush is a driver-level behavior, not a contract.
-
-### Future work: explicit fence sync
-
-A more rigorous alternative is to share a `D3D12_FENCE_FLAG_SHARED` fence across the two APIs:
-
-1. Create the fence on the wgpu-owned D3D12 device, export an NT handle via `ID3D12Device::CreateSharedHandle`, open it on D3D11 via `ID3D11Device5::OpenSharedFence`.
-2. Producer signals `value = n+1` on its D3D11 immediate context after `CopyResource`, releases the keyed mutex.
-3. Consumer queues `ID3D12CommandQueue::Wait(fence, n+1)` before the render submit.
-4. Bump `n` per frame.
-
-**What this buys:** standards-correct ordering between the producer's writes and the consumer's reads (today's design relies on the consumer-side transition barrier flushing caches, which is not contractual); robustness against future driver changes; reusable for D3D12↔Vulkan / cross-process interop.
-
-**Cost:** ~150–250 lines crossing the wgpu-hal escape hatch (`device.as_hal::<Dx12>()` for the queue), `ID3D11Device5` / `ID3D11DeviceContext4` plumbing, fence-value tracking, and a pre-submit injection point (probably a tiny no-op command buffer that runs `Wait` before the real submit). As of 0.2.0 this crate is unified on `windows 0.62` (via `webview2-com 0.39.1`), so the typed-COM bridge is a single-version path rather than a demo-side compatibility artifact.
-
-Worth doing when (a) the adapter ships beyond this development box and a driver gives someone stale frames, (b) GraphShell's interop story expands beyond WebView2 capture, or (c) the code wants to be canonically correct rather than empirically correct.
+The keyed-mutex path remains only for one-shot diagnostics that complete their D3D11 copy before returning their fresh resource. It is not a live composition-texture fallback.

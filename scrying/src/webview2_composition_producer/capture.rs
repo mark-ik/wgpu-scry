@@ -27,6 +27,7 @@ impl WebView2CompositionProducer {
                 .map_err(platform("CapturePreview"))?;
         }
 
+        let deadline = Instant::now() + self.frame_timeout;
         loop {
             pump_messages_for(Duration::from_millis(16));
             match rx.try_recv() {
@@ -34,7 +35,13 @@ impl WebView2CompositionProducer {
                     result.map_err(platform("CapturePreview completion"))?;
                     break;
                 }
-                Err(mpsc::TryRecvError::Empty) => continue,
+                Err(mpsc::TryRecvError::Empty) if Instant::now() < deadline => continue,
+                Err(mpsc::TryRecvError::Empty) => {
+                    return Err(WebSurfaceError::Platform(format!(
+                        "WebView2 CapturePreview did not complete within {:?}",
+                        self.frame_timeout
+                    )));
+                }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     return Err(WebSurfaceError::Platform(
                         "CapturePreview completion channel closed unexpectedly".into(),
@@ -82,10 +89,6 @@ impl WebView2CompositionProducer {
         }
     }
 
-    pub fn invalidate_persistent_dest(&mut self) {
-        self.persistent_dest = None;
-    }
-
     pub fn set_offset(&self, x: f32, y: f32) -> Result<(), WebSurfaceError> {
         self.pane_container
             .SetOffset(Vector3 { X: x, Y: y, Z: 0.0 })
@@ -127,7 +130,6 @@ impl WebView2CompositionProducer {
                 .map_err(platform("controller.SetBounds"))?;
         }
         self.force_restart_capture();
-        self.persistent_dest = None;
         self.size = size;
         Ok(())
     }
@@ -136,7 +138,7 @@ impl WebView2CompositionProducer {
         if self.capture_state.is_none() {
             self.start_capture()?;
         }
-        self.acquire_frame_with_timeout(Duration::from_secs(2))
+        self.acquire_frame_with_timeout(self.frame_timeout)
     }
 
     pub fn capture_metrics(&self) -> CaptureMetrics {
@@ -292,13 +294,19 @@ impl WebView2CompositionProducer {
             .map_err(platform("GetInterface<ID3D11Texture2D>"))?;
         let raw_texture = Interface::as_raw(&texture);
         self.generation = self.generation.saturating_add(1);
-        let allocated_now = self.ensure_persistent_dest(captured_size)?;
-        let dest = self
-            .persistent_dest
-            .as_mut()
-            .expect("persistent_dest populated above");
+        // Each host-visible frame gets its own destination texture. An
+        // explicit fence orders this D3D11 copy before the host's D3D12
+        // submission, but it cannot tell the producer when the host has
+        // finished sampling. Reusing a destination could therefore overwrite
+        // an imported texture still referenced by an in-flight host submit.
+        self.resource_epoch = self.resource_epoch.saturating_add(1);
+        let dest = self.capture_factory.create_shared_texture(
+            captured_size,
+            wgpu::TextureFormat::Bgra8Unorm,
+            self.resource_epoch,
+        )?;
         let fence_value = self.capture_factory.copy_capture_into_existing_target(
-            &dest.texture.texture,
+            &dest.texture,
             WebView2D3D11CaptureFrame {
                 size: captured_size,
                 format: wgpu::TextureFormat::Bgra8Unorm,
@@ -310,19 +318,11 @@ impl WebView2CompositionProducer {
         if let Some(state) = self.capture_state.as_mut() {
             state.first_frame_emitted = true;
         }
-        let resource_is_new = allocated_now || !dest.handle_handed_off;
-        let shared_handle = if resource_is_new {
-            dest.handle_handed_off = true;
-            dest.texture.shared_frame.shared_handle
-        } else {
-            std::ptr::null_mut()
-        };
         let surface_frame = WebView2DxgiSharedHandleFrame {
             size: captured_size,
             format: wgpu::TextureFormat::Bgra8Unorm,
             generation: self.resource_epoch,
-            shared_handle,
-            resource: dest.texture.shared_frame.resource.clone(),
+            resource: dest.shared_frame.resource.clone(),
             producer_sync: self.capture_factory.sync_mechanism(),
             fence_value,
         }
@@ -331,36 +331,11 @@ impl WebView2CompositionProducer {
             frame: surface_frame,
             content_size: captured_size,
             generation: self.generation,
-            shared_handle,
-            resource_is_new,
+            resource_is_new: true,
         };
         self.capture_samples_consumed
             .fetch_add(1, Ordering::Relaxed);
         Ok(Some(webview_frame))
-    }
-
-    fn ensure_persistent_dest(&mut self, size: PhysicalSize<u32>) -> Result<bool, WebSurfaceError> {
-        if self
-            .persistent_dest
-            .as_ref()
-            .map(|dest| dest.size == size)
-            .unwrap_or(false)
-        {
-            return Ok(false);
-        }
-        self.persistent_dest = None;
-        self.resource_epoch = self.resource_epoch.saturating_add(1);
-        let texture = self.capture_factory.create_shared_texture(
-            size,
-            wgpu::TextureFormat::Bgra8Unorm,
-            self.resource_epoch,
-        )?;
-        self.persistent_dest = Some(PersistentDest {
-            texture,
-            size,
-            handle_handed_off: false,
-        });
-        Ok(true)
     }
 
     fn start_capture(&mut self) -> Result<(), WebSurfaceError> {

@@ -11,9 +11,9 @@
 //! adapter must bridge them into a D3D12 shared texture before handing them to
 //! `wgpu-native-texture-interop`.
 
+use std::os::windows::io::FromRawHandle;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::os::windows::io::FromRawHandle;
 
 use crate::native_frame::{Dx12SharedTexture, NativeFrame, SyncMechanism};
 use dpi::PhysicalSize;
@@ -155,6 +155,12 @@ impl D3D11FenceSignaler {
 }
 
 impl D3D11SharedTextureFactory {
+    /// Create the one-shot diagnostic factory.
+    ///
+    /// This factory completes its D3D11 copy before returning a newly-created
+    /// resource. Reused host-visible resources require
+    /// [`Self::new_hardware_with_fence`] so the host can insert a D3D12 queue
+    /// wait for each producer signal.
     pub fn new_hardware() -> Result<Self, WebSurfaceError> {
         let (device, context) = create_d3d11_hardware_device()?;
         Ok(Self {
@@ -289,7 +295,13 @@ impl D3D11SharedTextureFactory {
     ) -> Result<WebView2DxgiSharedHandleFrame, WebSurfaceError> {
         let target =
             self.create_shared_texture(capture.size, capture.format, capture.generation)?;
-        let fence_value = self.copy_capture_into_existing_target(&target.texture, capture)?;
+        let fence_value = match self.fence.as_ref() {
+            Some(_) => self.copy_capture_into_existing_target(&target.texture, capture)?,
+            None => {
+                self.copy_with_keyed_mutex(&target.texture, capture)?;
+                0
+            }
+        };
         Ok(WebView2DxgiSharedHandleFrame {
             producer_sync: self.sync_mechanism(),
             fence_value,
@@ -300,21 +312,19 @@ impl D3D11SharedTextureFactory {
     /// Copy the captured D3D11 texture into the destination shared texture and
     /// synchronize per this factory's mode.
     ///
-    /// - **Keyed-mutex mode**: `AcquireSync(0)` → `CopyResource` →
-    ///   `flush_and_wait_for_gpu` (CPU spin on `D3D11_QUERY_EVENT`) →
-    ///   `ReleaseSync(0)`. Returns `0` (no fence).
-    /// - **Fence mode**: `CopyResource` → `Signal(fence, value)` on the
-    ///   immediate context (no CPU spin; the wgpu D3D12 consumer waits via
-    ///   `Dx12FenceSynchronizer`). Returns the signalled fence value.
+    /// This internal reused-resource entry point requires fence mode. The
+    /// one-shot keyed-mutex diagnostic path is available through
+    /// [`Self::copy_capture_into_shared_frame`], which completes the D3D11
+    /// copy before returning its fresh resource.
     pub(crate) fn copy_capture_into_existing_target(
         &self,
         target: &ID3D11Texture2D,
         capture: WebView2D3D11CaptureFrame,
     ) -> Result<u64, WebSurfaceError> {
-        match self.fence.as_ref() {
-            Some(fence_mode) => self.copy_with_fence(target, capture, fence_mode),
-            None => self.copy_with_keyed_mutex(target, capture).map(|()| 0),
-        }
+        let fence_mode = self.fence.as_ref().ok_or(WebSurfaceError::Unsupported(
+            "reusing a Windows capture texture requires an explicit D3D12 fence; use copy_capture_into_shared_frame for a one-shot diagnostic frame",
+        ))?;
+        self.copy_with_fence(target, capture, fence_mode)
     }
 
     fn copy_with_keyed_mutex(
@@ -803,9 +813,8 @@ pub struct WebView2DxgiSharedHandleFrame {
     pub size: PhysicalSize<u32>,
     pub format: wgpu::TextureFormat,
     pub generation: u64,
-    /// Non-owning raw handle view for diagnostics. The `resource` token owns
-    /// the handle for the lifetime of this frame.
-    pub shared_handle: *mut std::ffi::c_void,
+    /// RAII custody for the NT handle. It stays private so callers cannot
+    /// close a borrowed raw handle before the import path consumes it.
     pub(crate) resource: grafting::Dx12SharedResource,
     /// Sync mechanism the consumer should use; carried through to the
     /// `Dx12SharedTexture` frame.
@@ -881,11 +890,6 @@ impl DxgiSharedHandleBridge {
         &self,
         frame: WebView2DxgiSharedHandleFrame,
     ) -> Result<WebView2Dx12SharedFrame, WebSurfaceError> {
-        if frame.shared_handle.is_null() {
-            return Err(WebSurfaceError::Platform(
-                "WebView2 capture shared handle was null".to_string(),
-            ));
-        }
         Ok(frame.into_dx12_frame())
     }
 }
@@ -986,16 +990,14 @@ fn shared_handle_from_texture(
         ))
     })?;
 
-    let raw_handle = handle.0 as *mut std::ffi::c_void;
     let owned_handle = unsafe {
-        std::os::windows::io::OwnedHandle::from_raw_handle(raw_handle)
+        std::os::windows::io::OwnedHandle::from_raw_handle(handle.0 as *mut std::ffi::c_void)
     };
     let resource = grafting::Dx12SharedResource::from_owned_handle(owned_handle);
     Ok(WebView2DxgiSharedHandleFrame {
         size,
         format,
         generation,
-        shared_handle: raw_handle,
         resource,
         producer_sync: SyncMechanism::None,
         fence_value: 0,

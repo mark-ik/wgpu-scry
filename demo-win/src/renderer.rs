@@ -88,14 +88,12 @@ impl WebViewRenderer {
         window: Arc<Window>,
         host: HostWgpuContext,
         captured: CapturedComposition,
-        fence_synchronizer: Option<Dx12FenceSynchronizer>,
+        fence_synchronizer: Arc<Dx12FenceSynchronizer>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let device = host.device.clone();
         let queue = host.queue.clone();
-        let importer = match fence_synchronizer {
-            Some(sync) => WgpuTextureImporter::with_synchronizer(host.clone(), Box::new(sync)),
-            None => WgpuTextureImporter::new(host.clone()),
-        };
+        let importer =
+            WgpuTextureImporter::with_synchronizer(host.clone(), Box::new(fence_synchronizer));
         let surface = instance.create_surface(window.clone())?;
         let size = window.inner_size();
 
@@ -252,10 +250,6 @@ impl WebViewRenderer {
     }
 
     fn refresh_captured_texture(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        if force_reimport_every_frame() {
-            self.captured.producer.invalidate_persistent_dest();
-        }
-
         self.frames_polled = self.frames_polled.saturating_add(1);
 
         let new_frame = match self.captured.producer.try_acquire_frame() {
@@ -498,11 +492,4 @@ fn build_bind_group_for_texture(
             },
         ],
     })
-}
-
-fn force_reimport_every_frame() -> bool {
-    std::env::var("FORCE_REIMPORT_EVERY_FRAME")
-        .ok()
-        .filter(|v| !v.is_empty() && v != "0")
-        .is_some()
 }

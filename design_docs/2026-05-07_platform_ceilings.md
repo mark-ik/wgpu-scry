@@ -42,11 +42,12 @@ import, with optional shared D3D12 fence sync.
 - **Pixel quality**: post-DComp composited output. Pixel-exact under
   the WebView's own rasterization. Cannot get pre-composition raw
   layer textures.
-- **GPU sync** (today): explicit `D3D12_FENCE_FLAG_SHARED` sync is
-  wired when the host passes a fence handle through
-  `WebView2CompositionConfig::with_fence_shared_handle`. The older
-  keyed-mutex / transition-barrier path remains the fallback when no
-  fence is supplied.
+- **GPU sync** (today): imported WebView2 frames require explicit
+  `D3D12_FENCE_FLAG_SHARED` synchronization. The host supplies a
+  `Dx12FenceSynchronizer` through
+  `WebView2CompositionConfig::with_dx12_fence_synchronizer`; the producer
+  emits a fresh destination texture and a signalled fence value for every
+  frame.
 - **Input**: full mouse + scroll (`SendMouseInput`), full touch + pen
   (`SendPointerInput`), focus entry (`MoveFocus`) with focus-event
   hooks available at the WebView2 ceiling, drag-and-drop forwarding
@@ -496,14 +497,13 @@ possible without upstream API additions". Everything else is just work.
 The cross-API sync story is the only place where the platforms
 differ in how *contractual* the producer→consumer ordering is today.
 
-### Windows — explicit D3D12 fence (shipped, fallback still present)
+### Windows — explicit D3D12 fence (shipped)
 
 The original path used keyed-mutex on the producer side and a
 throwaway `copy_texture_to_buffer` on the consumer side to force a
-`SHADER_RESOURCE → COPY_SRC → SHADER_RESOURCE` transition barrier,
-which on D3D12 happened to flush shader caches that would otherwise
-hold a stale view of the externally-written shared texture. That path
-remains available as a fallback.
+`SHADER_RESOURCE → COPY_SRC → SHADER_RESOURCE` transition barrier.
+It could not establish that the producer would wait before overwriting
+the host's in-flight sample, so it is not used by the composition producer.
 
 The contractual path is now a `D3D12_FENCE_FLAG_SHARED` fence:
 
@@ -512,17 +512,16 @@ The contractual path is now a `D3D12_FENCE_FLAG_SHARED` fence:
 2. Open it on the producer's D3D11 device via
    `ID3D11Device5::OpenSharedFence`.
 3. Producer signals `value = n+1` on its D3D11 immediate context after
-   `CopyResource`, releases the keyed mutex.
+   `CopyResource` into a newly allocated shared destination.
 4. Consumer queues `ID3D12CommandQueue::Wait(fence, n+1)` before the
    render submit.
 5. Bump `n` per frame.
 
-The host creates the synchronizer, passes the shared handle into
-`WebView2CompositionConfig::with_fence_shared_handle`, and imports
-frames carrying `SyncMechanism::ExplicitFence` plus a monotonic
-`fence_value`. If no handle is supplied, the producer uses the older
-fallback sync path and the consumer can still force a fresh resource
-with `invalidate_persistent_dest` if a driver ever shows stale pixels.
+The host creates and retains the synchronizer, passes it through
+`WebView2CompositionConfig::with_dx12_fence_synchronizer`, and imports
+frames with an importer using that synchronizer. Frames carry
+`SyncMechanism::ExplicitFence` plus a monotonic `fence_value`; each carries
+a fresh resource, so producer writes cannot race an in-flight host sample.
 
 ### macOS — MTLSharedEvent (real producer signal + producer-side wait)
 

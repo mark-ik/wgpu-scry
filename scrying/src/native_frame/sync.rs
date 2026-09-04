@@ -55,6 +55,24 @@ pub trait InteropSynchronizer {
     ) -> Result<(), InteropError>;
 }
 
+impl<T: InteropSynchronizer + ?Sized> InteropSynchronizer for std::sync::Arc<T> {
+    fn producer_complete(
+        &self,
+        frame: &NativeFrame,
+        mechanism: SyncMechanism,
+    ) -> Result<(), InteropError> {
+        (**self).producer_complete(frame, mechanism)
+    }
+
+    fn consumer_ready(
+        &self,
+        texture: &ImportedTexture,
+        mechanism: SyncMechanism,
+    ) -> Result<(), InteropError> {
+        (**self).consumer_ready(texture, mechanism)
+    }
+}
+
 /// A synchronizer that does nothing. Suitable when the caller manages all
 /// synchronization externally (e.g. via a shared queue or explicit barriers).
 #[derive(Default)]
@@ -78,10 +96,9 @@ impl InteropSynchronizer for NoopSynchronizer {
     }
 }
 
-/// Default synchronizer: accepts only [`SyncMechanism::None`]. The
-/// keyed-mutex Windows path uses producer-side `IDXGIKeyedMutex` +
-/// consumer-side transition-barrier flush, both of which are external to
-/// this trait, so the synchronizer just sees `None`.
+/// Default synchronizer: accepts only [`SyncMechanism::None`]. It is suitable
+/// for implicit platform paths and one-shot diagnostics, not live WebView2
+/// composition frames, which require [`crate::native_frame::Dx12FenceSynchronizer`].
 #[derive(Default)]
 pub struct ImplicitOnlySynchronizer;
 
@@ -145,5 +162,18 @@ impl ExplicitExternalSemaphoreSynchronizer {
             SyncMechanism::None | SyncMechanism::ExplicitExternalSemaphore => Ok(()),
             other => Err(InteropError::UnsupportedSynchronization(other)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InteropSynchronizer, NoopSynchronizer};
+    use std::sync::Arc;
+
+    fn assert_interop_synchronizer<T: InteropSynchronizer>() {}
+
+    #[test]
+    fn arc_forwards_interop_synchronizer() {
+        assert_interop_synchronizer::<Arc<NoopSynchronizer>>();
     }
 }

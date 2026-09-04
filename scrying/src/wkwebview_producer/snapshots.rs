@@ -24,7 +24,7 @@ use objc2_web_kit::WKSnapshotConfiguration;
 use crate::{WebSurfaceError, WebSurfaceFrame};
 
 use super::helpers::pump_until;
-use super::producer::{PendingSnapshot, SendRetainedNSImage, WkWebViewProducer};
+use super::producer::{PendingSnapshot, WkWebViewProducer};
 
 impl WkWebViewProducer {
     /// Non-blocking variant of [`Self::capture_cpu_snapshot`].
@@ -50,11 +50,15 @@ impl WkWebViewProducer {
             let result = if !err.is_null() {
                 PendingSnapshot::Failed(unsafe { (*err).localizedDescription().to_string() })
             } else if let Some(non_null) = NonNull::new(image) {
-                let retained = unsafe { Retained::retain(non_null.as_ptr()) };
-                match retained {
-                    Some(image) => PendingSnapshot::Image(SendRetainedNSImage(image)),
+                // WKWebView invokes this completion on the main thread. Copy
+                // the image's TIFF data while the callback still owns its +0
+                // NSImage borrow, so the cross-thread result slot contains
+                // plain bytes rather than an AppKit object.
+                let image = unsafe { non_null.as_ref() };
+                match image.TIFFRepresentation() {
+                    Some(data) => PendingSnapshot::Tiff(data.to_vec()),
                     None => PendingSnapshot::Failed(
-                        "Retained::retain returned None for the snapshot NSImage".into(),
+                        "snapshot NSImage has no TIFF representation".into(),
                     ),
                 }
             } else {
@@ -90,17 +94,14 @@ impl WkWebViewProducer {
             PendingSnapshot::Failed(msg) => Some(Err(WebSurfaceError::Platform(format!(
                 "snapshot failed: {msg}"
             )))),
-            PendingSnapshot::Image(SendRetainedNSImage(ns_image)) => {
-                Some(self.decode_ns_image(&ns_image))
-            }
+            PendingSnapshot::Tiff(tiff_bytes) => Some(self.decode_tiff_snapshot(tiff_bytes)),
         }
     }
 
-    fn decode_ns_image(&mut self, ns_image: &NSImage) -> Result<WebSurfaceFrame, WebSurfaceError> {
-        let tiff_data = ns_image.TIFFRepresentation().ok_or_else(|| {
-            WebSurfaceError::Platform("NSImage has no TIFF representation".into())
-        })?;
-        let tiff_bytes = tiff_data.to_vec();
+    fn decode_tiff_snapshot(
+        &mut self,
+        tiff_bytes: Vec<u8>,
+    ) -> Result<WebSurfaceFrame, WebSurfaceError> {
         let rgba = image::load_from_memory_with_format(&tiff_bytes, image::ImageFormat::Tiff)
             .map_err(|e| WebSurfaceError::Platform(format!("failed to decode TIFF snapshot: {e}")))?
             .to_rgba8();
@@ -207,18 +208,6 @@ impl WkWebViewProducer {
         let tiff_data = ns_image.TIFFRepresentation().ok_or_else(|| {
             WebSurfaceError::Platform("NSImage has no TIFF representation".into())
         })?;
-        let tiff_bytes = tiff_data.to_vec();
-        let rgba = image::load_from_memory_with_format(&tiff_bytes, image::ImageFormat::Tiff)
-            .map_err(|e| WebSurfaceError::Platform(format!("failed to decode TIFF snapshot: {e}")))?
-            .to_rgba8();
-
-        let size = PhysicalSize::new(rgba.width(), rgba.height());
-        let generation = self.snapshot_generation;
-        self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
-        Ok(WebSurfaceFrame::CpuRgba {
-            size,
-            pixels: rgba,
-            generation,
-        })
+        self.decode_tiff_snapshot(tiff_data.to_vec())
     }
 }

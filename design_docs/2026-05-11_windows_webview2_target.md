@@ -172,8 +172,8 @@ Audited against
 
 - Composition path: `ICoreWebView2CompositionController` attached to a
   WinComp visual, `GraphicsCaptureItem::CreateFromVisual`,
-  `Direct3D11CaptureFramePool`, persistent shared D3D11 destination texture,
-  and `NativeFrame::Dx12SharedTexture` handoff.
+  `Direct3D11CaptureFramePool`, one shared D3D11 destination texture per
+  emitted frame, and `NativeFrame::Dx12SharedTexture` handoff.
 - Window-to-Visual diagnostic path: normal `ICoreWebView2Controller` creation
   with
   `COREWEBVIEW2_FORCED_HOSTING_MODE=COREWEBVIEW2_HOSTING_MODE_WINDOW_TO_VISUAL`,
@@ -181,10 +181,11 @@ Audited against
   imported into wgpu. The stricter single- and three-page smokes reject this as
   a no-overlay target because the live pages expose visible `Chrome_WidgetWin_0`
   child HWNDs.
-- Explicit GPU sync: `WebView2CompositionConfig::with_fence_shared_handle`
-  opens a host-created D3D12 shared fence on the producer side; emitted frames
-  carry `SyncMechanism::ExplicitFence` and a monotonic fence value. No-handle
-  mode keeps the fallback path.
+- Explicit GPU sync:
+  `WebView2CompositionConfig::with_dx12_fence_synchronizer` opens a
+  host-created D3D12 shared fence on the producer side; emitted frames carry
+  `SyncMechanism::ExplicitFence`, a monotonic fence value, and a fresh
+  resource. Imported-texture construction rejects a missing synchronizer.
 - Lifecycle and navigation: inline HTML, URL navigation, reload, stop,
   back/forward, `CanGoBack`, `CanGoForward`, `NavigationStarting`,
   `SourceChanged`, `NavigationCompleted`, document-title events, and

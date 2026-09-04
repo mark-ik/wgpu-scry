@@ -432,9 +432,8 @@ pub(crate) fn run_windows_shared_texture_probe(
         wgpu::TextureFormat::Bgra8Unorm,
         1,
     )?;
-    let handle = shared.shared_handle;
     let dx12_frame = DxgiSharedHandleBridge.bridge_shared_handle(shared)?;
-    println!("D3D11 shared texture probe: exported NT handle {handle:p}");
+    println!("D3D11 shared texture probe: exported RAII-owned NT handle");
 
     let surface_frame = dx12_frame.into_surface_frame();
     let WebSurfaceFrame::Native(native_frame) = surface_frame else {
@@ -593,7 +592,7 @@ pub(crate) struct CapturedComposition {
 pub(crate) fn run_platform_composition_visual_probe(
     window: &Window,
     host: &HostWgpuContext,
-    fence_shared_handle: Option<*mut std::ffi::c_void>,
+    fence_synchronizer: &Arc<scrying::native_frame::Dx12FenceSynchronizer>,
     cli: &Cli,
 ) -> Result<Option<CapturedComposition>, Box<dyn std::error::Error>> {
     use windows::Win32::System::WinRT::{
@@ -653,9 +652,7 @@ pub(crate) fn run_platform_composition_visual_probe(
     let mut config = scrying::PlatformWebSurfaceConfig::new(initial_size, user_data_dir.clone())
         .with_offset(initial_offset_x, initial_offset_y)
         .with_diagnostic_backdrop((27, 86, 96));
-    if let Some(handle) = fence_shared_handle {
-        config = config.with_fence_shared_handle(handle);
-    }
+    config = config.with_dx12_fence_synchronizer(Arc::clone(fence_synchronizer));
     if cli.incognito_test {
         config = config.non_persistent();
     }
@@ -749,7 +746,10 @@ pub(crate) fn run_platform_composition_visual_probe(
         let mut producer_for_readback = producer;
         let captured = producer_for_readback.acquire_full_frame()?;
         let content_size = captured.content_size;
-        let importer = WgpuTextureImporter::new(host.clone());
+        let importer = WgpuTextureImporter::with_synchronizer(
+            host.clone(),
+            Box::new(Arc::clone(fence_synchronizer)),
+        );
         let WebSurfaceFrame::Native(native_frame) = captured.frame else {
             return Err("WebView2 composition producer did not emit a native frame".into());
         };

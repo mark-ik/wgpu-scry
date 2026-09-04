@@ -46,7 +46,7 @@ use crate::{
 use super::super::helpers::pump_until;
 use super::super::producer::WkWebViewProducer;
 use super::{
-    CaptureSignal, CaptureState, LatestSample, SendCFRetained, StreamErrorDelegate,
+    CaptureSignal, CaptureState, LatestSample, QueuedSampleBuffer, StreamErrorDelegate,
     StreamOutputDelegate, host_window_pixel_size, make_stream_configuration,
 };
 
@@ -104,12 +104,10 @@ impl WkWebViewProducer {
         // Acquire the host's MTLDevice via the wgpu-hal escape hatch so
         // textures we allocate land on the same device the consumer
         // renders against.
-        let metal_device: Retained<ProtocolObject<dyn MTLDevice>> = unsafe {
-            crate::wgpu_compat::metal_device(&host.device)
-        }
-        .ok_or_else(|| {
-            WebSurfaceError::Platform("host wgpu device is not on the Metal backend".into())
-        })?;
+        let metal_device: Retained<ProtocolObject<dyn MTLDevice>> =
+            unsafe { crate::wgpu_compat::metal_device(&host.device) }.ok_or_else(|| {
+                WebSurfaceError::Platform("host wgpu device is not on the Metal backend".into())
+            })?;
 
         let target_window = self.resolve_target_window(timeout)?;
         // Capture the *full* host window at native pixel
@@ -230,6 +228,7 @@ impl WkWebViewProducer {
             // success — start both counters at 0 (revision == applied).
             config_revision: Arc::new(AtomicU64::new(0)),
             applied_config_revision: Arc::new(AtomicU64::new(0)),
+            configuration_error: Arc::new(Mutex::new(None)),
             shared_event,
             next_signal_value: AtomicU64::new(0),
         });
@@ -271,7 +270,7 @@ impl WkWebViewProducer {
         /// `Retained<SCWindow>` is not `Send` by default, but the
         /// `SCShareableContent` API hands us a fully-formed object
         /// that the system documents as safe to hold across thread
-        /// boundaries — same reasoning as `SendCFRetained` above.
+        /// boundaries.
         struct WindowQueryResult {
             matched: Option<Retained<SCWindow>>,
             error: Option<String>,
@@ -385,9 +384,22 @@ impl WkWebViewProducer {
             )));
         }
 
+        if let Ok(slot) = capture.configuration_error.lock()
+            && let Some(failure) = slot.as_ref()
+            && failure.revision
+                == capture
+                    .config_revision
+                    .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(WebSurfaceError::Platform(format!(
+                "SCStream updateConfiguration failed for revision {}: {}",
+                failure.revision, failure.message
+            )));
+        }
+
         let sample = match capture.latest.lock() {
             Ok(mut slot) => match slot.take() {
-                Some(SendCFRetained(buffer)) => buffer,
+                Some(QueuedSampleBuffer(buffer)) => buffer,
                 None => return Ok(None),
             },
             Err(_) => {

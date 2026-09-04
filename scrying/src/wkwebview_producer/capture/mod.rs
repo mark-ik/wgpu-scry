@@ -35,26 +35,29 @@ use super::producer::WkWebViewProducer;
 mod async_start;
 mod blocking;
 
-/// Newtype that asserts a CF-typed retained reference is safe to send
-/// across threads.
+/// The one Core Foundation object this module transfers from SCK's
+/// sample queue to the main-thread consumer.
 ///
 /// `CMSampleBuffer` and the CF types it transitively references
 /// (`CVImageBuffer`, `IOSurfaceRef`) are documented thread-safe by
 /// Apple — retain/release is atomic and the underlying data is
 /// immutable from the consumer's perspective. The objc2-core-foundation
 /// crate is conservative and doesn't auto-derive `Send` for
-/// `CFRetained<T>`, so we wrap explicitly at the dispatch-queue
+/// `CFRetained<T>`. This wrapper intentionally cannot be used for
+/// arbitrary CF objects: only a retained sample buffer crosses this
 /// boundary.
-pub(super) struct SendCFRetained<T>(pub(super) CFRetained<T>);
-// SAFETY: see `SendCFRetained` doc.
-unsafe impl<T> Send for SendCFRetained<T> {}
+pub(super) struct QueuedSampleBuffer(pub(super) CFRetained<CMSampleBuffer>);
+// SAFETY: Core Media documents CMSampleBuffer as thread-safe. The
+// producer transfers the retained buffer from SCK's sample queue into a
+// mutex and consumes it only on the main thread.
+unsafe impl Send for QueuedSampleBuffer {}
 
 /// Latest screen-capture sample handed off from the
 /// `SCStreamOutput::stream:didOutputSampleBuffer:ofType:` callback
 /// (which fires on a background dispatch queue) to `try_acquire_frame`
 /// on the main thread. Only the most recent sample is kept; older
 /// samples are dropped on overwrite.
-pub(super) type LatestSample = Mutex<Option<SendCFRetained<CMSampleBuffer>>>;
+pub(super) type LatestSample = Mutex<Option<QueuedSampleBuffer>>;
 
 /// State the SCK output delegate writes to from the background
 /// dispatch queue. Bundles the latest-sample slot with a delivery
@@ -122,7 +125,7 @@ define_class!(
             // callee must retain if it wants to outlive this call.
             let retained = unsafe { CFRetained::retain(NonNull::from(sample_buffer)) };
             if let Ok(mut slot) = state.latest.lock() {
-                *slot = Some(SendCFRetained(retained));
+                *slot = Some(QueuedSampleBuffer(retained));
             }
         }
     }
@@ -198,22 +201,48 @@ pub enum CaptureStatus {
 pub(super) enum PendingCaptureSlot {
     Idle,
     Starting,
-    Ready(SendOnly<CaptureState>),
+    Ready(CaptureStateForMainThread),
     Failed(String),
 }
 
-/// Generic Send wrapper for non-Send objc2 `Retained` items that need
-/// to traverse a dispatch-queue boundary.
+/// A fully initialized capture state waiting to be installed by
+/// [`super::WkWebViewProducer::capture_status`] on the main thread.
 ///
-/// Justification: SCK / Metal / dispatch types we ferry across the
-/// SCShareableContent → main-thread handoff are CF / NSObject types
-/// whose retain/release is atomic and whose data is immutable from
-/// our consumption perspective. The objc2 crates are conservative
-/// and don't auto-derive `Send` for all `Retained<T>`; we wrap
-/// explicitly at the queue boundary.
-pub(super) struct SendOnly<T>(pub(super) T);
-// SAFETY: see `SendOnly` doc.
-unsafe impl<T> Send for SendOnly<T> {}
+/// This is a one-way ownership handoff from ScreenCaptureKit's start
+/// completion queue. `CaptureState` contains only SCK, Metal, dispatch,
+/// and synchronization objects, never AppKit or WebKit objects. The state
+/// is removed from the mutex and installed into the non-Send producer before
+/// it is used.
+pub(super) struct CaptureStateForMainThread(pub(super) CaptureState);
+// SAFETY: see `CaptureStateForMainThread`'s concrete handoff contract.
+unsafe impl Send for CaptureStateForMainThread {}
+
+/// Metal resources allocated from the host device before entering
+/// ScreenCaptureKit's asynchronous start path.
+///
+/// This narrowly permits the three Metal resources to travel into SCK's
+/// completion queue. They are retained Objective-C objects with atomic
+/// lifetime management; their use remains confined to the capture pipeline
+/// and the state is handed back to the main-thread producer.
+pub(super) struct AsyncMetalResources {
+    pub(super) metal_device: Retained<ProtocolObject<dyn MTLDevice>>,
+    pub(super) command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    pub(super) shared_event: Retained<ProtocolObject<dyn MTLSharedEvent>>,
+}
+// SAFETY: the captured MTLDevice, MTLCommandQueue, and MTLSharedEvent are
+// documented reference-counted Metal objects. This wrapper is used only by
+// the SCK start completion chain and cannot carry arbitrary Objective-C
+// objects.
+unsafe impl Send for AsyncMetalResources {}
+
+/// The concrete SCK/Metal state retained while `startCapture` is pending.
+/// It exists only inside the nested completion block and is converted into a
+/// [`CaptureStateForMainThread`] after a successful start.
+pub(super) struct CaptureStartResources(pub(super) InProgressCaptureState);
+// SAFETY: this bundle contains only the concrete SCK, Metal, dispatch, and
+// synchronization resources listed in `InProgressCaptureState`; it excludes
+// AppKit and WebKit objects and is transferred once to the start completion.
+unsafe impl Send for CaptureStartResources {}
 
 /// Captured-by-block bag of all the SCK pieces the inner
 /// `startCaptureWithCompletionHandler:` block needs to assemble a
@@ -231,7 +260,49 @@ pub(super) struct InProgressCaptureState {
     pub(super) samples_consumed: Arc<AtomicU64>,
     pub(super) config_revision: Arc<AtomicU64>,
     pub(super) applied_config_revision: Arc<AtomicU64>,
+    pub(super) configuration_error: Arc<Mutex<Option<ConfigurationFailure>>>,
     pub(super) shared_event: Retained<ProtocolObject<dyn MTLSharedEvent>>,
+}
+
+/// A failed `SCStream::updateConfiguration:` callback. Kept with the
+/// requested revision so an older failure cannot poison a newer layout
+/// request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ConfigurationFailure {
+    pub(super) revision: u64,
+    pub(super) message: String,
+}
+
+/// Complete one asynchronous stream-configuration request.
+///
+/// A failed callback deliberately does *not* advance `applied`: frames are
+/// ambiguous until a later request succeeds, and `try_acquire_frame` reports
+/// the retained error rather than pretending capture remains healthy.
+pub(super) fn complete_configuration_update(
+    requested: &AtomicU64,
+    applied: &AtomicU64,
+    failure: &Mutex<Option<ConfigurationFailure>>,
+    revision: u64,
+    error: Option<String>,
+) {
+    use std::sync::atomic::Ordering;
+
+    // A more recent resize/DPI update superseded this callback. Its result
+    // says nothing about the configuration consumers now need.
+    if requested.load(Ordering::Acquire) != revision {
+        return;
+    }
+
+    if let Some(message) = error {
+        if let Ok(mut slot) = failure.lock() {
+            *slot = Some(ConfigurationFailure { revision, message });
+        }
+        return;
+    }
+
+    // Keep the acknowledgement monotonic even if callbacks arrive out of
+    // order. Only a successful callback may open the sample gate.
+    applied.fetch_max(revision, Ordering::Release);
 }
 
 /// Helper used by SCK completion blocks to update the shared
@@ -319,6 +390,10 @@ pub(super) struct CaptureState {
     /// returns `Ok(None)` to drop the in-flight ambiguous samples.
     /// Atomic because the completion fires off-main.
     pub(super) applied_config_revision: Arc<AtomicU64>,
+    /// Most-recent failure for the current configuration revision.
+    /// `try_acquire_frame` reports this instead of silently returning
+    /// an endless sequence of `None` values after SCK rejects a resize.
+    pub(super) configuration_error: Arc<Mutex<Option<ConfigurationFailure>>>,
 }
 
 /// Build the [`SCStreamConfiguration`] used by both
@@ -510,5 +585,67 @@ impl WkWebViewProducer {
         if let Ok(mut p) = self.pending_capture.lock() {
             *p = PendingCaptureSlot::Idle;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{ConfigurationFailure, complete_configuration_update};
+
+    #[test]
+    fn failed_configuration_never_acknowledges_its_revision() {
+        let requested = AtomicU64::new(4);
+        let applied = AtomicU64::new(3);
+        let failure = Mutex::new(None);
+
+        complete_configuration_update(
+            &requested,
+            &applied,
+            &failure,
+            4,
+            Some("SCK rejected the output dimensions".into()),
+        );
+
+        assert_eq!(applied.load(Ordering::Acquire), 3);
+        assert_eq!(
+            *failure.lock().unwrap(),
+            Some(ConfigurationFailure {
+                revision: 4,
+                message: "SCK rejected the output dimensions".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn stale_configuration_completion_cannot_change_current_state() {
+        let requested = AtomicU64::new(8);
+        let applied = AtomicU64::new(7);
+        let failure = Mutex::new(None);
+
+        complete_configuration_update(
+            &requested,
+            &applied,
+            &failure,
+            7,
+            Some("old request failed".into()),
+        );
+
+        assert_eq!(applied.load(Ordering::Acquire), 7);
+        assert_eq!(*failure.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn successful_configuration_acknowledges_current_revision() {
+        let requested = AtomicU64::new(9);
+        let applied = AtomicU64::new(8);
+        let failure = Mutex::new(None);
+
+        complete_configuration_update(&requested, &applied, &failure, 9, None);
+
+        assert_eq!(applied.load(Ordering::Acquire), 9);
+        assert_eq!(*failure.lock().unwrap(), None);
     }
 }

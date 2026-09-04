@@ -519,46 +519,16 @@ impl AppState {
         #[cfg(target_os = "windows")]
         run_windows_shared_texture_probe(&window, &host)?;
 
-        // Opt into the explicit-fence cross-API sync path
-        // (wgpu D3D12 `Wait` on a `D3D12_FENCE_FLAG_SHARED` fence the WebView2
-        // producer signals after `CopyResource`). Disabled by default so the
-        // existing keyed-mutex + CPU-spin path stays the verified default.
-        // Setting `WEBVIEW_FENCE_SYNC=1` enables it. Mutually exclusive with
-        // `WEBVIEW_READBACK_VALIDATE` because that path uses a separate
-        // importer that doesn't carry the synchronizer.
+        // WebView2 imported textures always use an explicit D3D12 fence. A
+        // producer-side keyed mutex cannot establish when the host GPU has
+        // finished sampling a reused texture.
         #[cfg(target_os = "windows")]
-        let fence_synchronizer: Option<Dx12FenceSynchronizer> = if std::env::var(
-            "WEBVIEW_FENCE_SYNC",
-        )
-        .ok()
-        .filter(|v| !v.is_empty() && v != "0")
-        .is_some()
-        {
-            if std::env::var("WEBVIEW_READBACK_VALIDATE")
-                .ok()
-                .filter(|v| !v.is_empty() && v != "0")
-                .is_some()
-            {
-                println!(
-                    "WEBVIEW_FENCE_SYNC ignored: incompatible with WEBVIEW_READBACK_VALIDATE (separate importer)"
-                );
-                None
-            } else {
-                let sync = Dx12FenceSynchronizer::new(&host)?;
-                println!(
-                    "WEBVIEW_FENCE_SYNC enabled: shared fence handle {:p}",
-                    sync.shared_handle().0
-                );
-                Some(sync)
-            }
-        } else {
-            None
-        };
-
+        let fence_synchronizer = Arc::new(Dx12FenceSynchronizer::new(&host)?);
         #[cfg(target_os = "windows")]
-        let fence_handle = fence_synchronizer
-            .as_ref()
-            .map(|s| s.shared_handle().0 as *mut std::ffi::c_void);
+        println!(
+            "WebView2 explicit-fence synchronization enabled: shared fence handle {:p}",
+            fence_synchronizer.shared_handle().0
+        );
 
         #[cfg(target_os = "windows")]
         let multi_pane = if cli.multi_pane_input_test {
@@ -587,7 +557,7 @@ impl AppState {
             validate_platform_window_to_visual(&window, &host)?;
             None
         } else {
-            run_platform_composition_visual_probe(&window, &host, fence_handle, cli)?
+            run_platform_composition_visual_probe(&window, &host, &fence_synchronizer, cli)?
         };
 
         #[cfg(target_os = "windows")]

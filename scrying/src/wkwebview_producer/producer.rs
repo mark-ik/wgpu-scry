@@ -20,7 +20,7 @@ use dpi::PhysicalSize;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2_app_kit::{NSImage, NSView};
+use objc2_app_kit::NSView;
 use objc2_foundation::NSKeyValueObservingOptions;
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSObjectNSKeyValueObserverRegistration,
@@ -210,18 +210,11 @@ pub struct WkWebViewProducer {
 
 pub(super) type PendingPdfSlot = Arc<Mutex<Option<Result<Vec<u8>, String>>>>;
 
-/// Newtype that asserts a `Retained<NSImage>` is safe to send between
-/// threads — the producer's snapshot completion handler fires on the
-/// main thread and the producer's `poll_snapshot` reads from the same
-/// thread, so the cross-thread `Send` is satisfied trivially. The
-/// wrapper exists to satisfy the conservative compiler bound on
-/// `Mutex<Option<T>>` where T isn't `Send` by default.
-pub(super) struct SendRetainedNSImage(pub(super) Retained<NSImage>);
-// SAFETY: see `SendRetainedNSImage` doc.
-unsafe impl Send for SendRetainedNSImage {}
-
 pub(super) enum PendingSnapshot {
-    Image(SendRetainedNSImage),
+    /// Snapshot pixels encoded synchronously while WKWebView's completion
+    /// callback still owns the main-thread `NSImage`. Keeping bytes here
+    /// avoids sending an AppKit object through the async result slot.
+    Tiff(Vec<u8>),
     Failed(String),
 }
 
@@ -636,7 +629,9 @@ impl WkWebViewProducer {
     /// stream config tracks window dimensions, not webview
     /// dimensions.
     pub(super) fn update_capture_for_layout_change(&self) {
-        use super::capture::{host_window_pixel_size, make_stream_configuration};
+        use super::capture::{
+            complete_configuration_update, host_window_pixel_size, make_stream_configuration,
+        };
         let Some(capture) = self.capture.as_ref() else {
             return;
         };
@@ -648,24 +643,30 @@ impl WkWebViewProducer {
         // Bump `config_revision` *before* asking SCK to apply, so a
         // sample that arrives between this line and SCK's
         // completion is treated as ambiguous (revision !=
-        // applied_revision → drop). The completion handler
-        // increments `applied_config_revision` to match, opening
-        // the gate for samples at the new config. This subsumes
+        // applied_revision → drop). A *successful* completion
+        // advances `applied_config_revision`, opening the gate for
+        // samples at the new config; a failure is retained and
+        // surfaced by `try_acquire_frame`. This subsumes
         // the dim-match guard for any new SCK config dimension we
         // care about (color space, pixel format) without us having
         // to read CFType attachments off each CMSampleBuffer.
         let new_revision = capture
             .config_revision
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
             + 1;
+        // A newer request is the only recovery action after a failed
+        // configuration update. Clear a stale failure before issuing it;
+        // the completion will install a fresh error if this request fails too.
+        if let Ok(mut failure) = capture.configuration_error.lock() {
+            *failure = None;
+        }
+        let requested = Arc::clone(&capture.config_revision);
         let applied = Arc::clone(&capture.applied_config_revision);
-        let completion = block2::RcBlock::new(move |_err: *mut objc2_foundation::NSError| {
-            // Promote `applied` to the requested revision iff no
-            // newer revision has been requested in the meantime.
-            // `compare_exchange_weak` keeps the monotonic property:
-            // we never roll `applied` backwards relative to the
-            // latest *successfully applied* config.
-            let _ = applied.fetch_max(new_revision, std::sync::atomic::Ordering::Relaxed);
+        let failure = Arc::clone(&capture.configuration_error);
+        let completion = block2::RcBlock::new(move |err: *mut objc2_foundation::NSError| {
+            let error =
+                (!err.is_null()).then(|| unsafe { (*err).localizedDescription().to_string() });
+            complete_configuration_update(&requested, &applied, &failure, new_revision, error);
         });
         unsafe {
             capture
