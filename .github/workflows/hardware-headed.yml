@@ -38,7 +38,7 @@ jobs:
 
     steps:
       - name: Serialize host hardware use
-        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@ab70a66e625f15ae1b369bf34502fe6f7f7625a7
+        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@781aa6aad3f63b83ad48b192a6a5d078be1d71b8
       - uses: actions/checkout@v4
 
       - name: Assert the provisioned toolchain and adapter
@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Serialize host hardware use
-        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@ab70a66e625f15ae1b369bf34502fe6f7f7625a7
+        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@781aa6aad3f63b83ad48b192a6a5d078be1d71b8
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
       - name: Run WKWebView assertions including live capture and resize
@@ -86,7 +86,7 @@ jobs:
 
     steps:
       - name: Serialize host hardware use
-        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@ab70a66e625f15ae1b369bf34502fe6f7f7625a7
+        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@781aa6aad3f63b83ad48b192a6a5d078be1d71b8
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
       - name: Run WKWebView assertions including live capture and resize
@@ -108,7 +108,7 @@ jobs:
 
     steps:
       - name: Serialize host hardware use
-        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@ab70a66e625f15ae1b369bf34502fe6f7f7625a7
+        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@781aa6aad3f63b83ad48b192a6a5d078be1d71b8
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
 
