@@ -63,10 +63,9 @@ use super::ui_delegate::{PermissionHandlerFn, UiDelegate};
 
 /// macOS WKWebView capture producer.
 ///
-/// Slice A: real WKWebView lifecycle, no GPU capture (output is
-/// `OverlayOnly`). Slice B will wire ScreenCaptureKit → IOSurface →
-/// `MetalTextureRef` and flip `acquire_frame` to
-/// `WebSurfaceFrame::Native(...)`.
+/// Starts in overlay mode. After an explicit successful ScreenCaptureKit
+/// start, it emits `MetalTextureRef` frames and reports imported-texture
+/// capability as live.
 pub struct WkWebViewProducer {
     pub(super) capabilities: WebSurfaceCapabilities,
     pub(super) webview: Retained<WKWebView>,
@@ -536,18 +535,16 @@ impl WkWebViewProducer {
         Ok(Self {
             capabilities: WebSurfaceCapabilities {
                 backend: SystemWebviewBackend::WkWebView,
-                // The capture pipeline isn't wired yet, so we still
-                // advertise NativeChildOverlay as the preferred mode.
-                // Slice B flips this to ImportedTexture once
-                // ScreenCaptureKit emits frames.
+                // Capture is not live until the host explicitly starts it
+                // and ScreenCaptureKit accepts the request.
                 preferred_mode: WebSurfaceMode::NativeChildOverlay,
-                imported_texture: native_frame::CapabilityStatus::Unsupported(
-                    native_frame::UnsupportedReason::PlatformNotImplemented,
+                imported_texture: native_frame::CapabilityStatus::Partial(
+                    "requires an explicit successful start_capture or start_capture_async call and Screen Recording permission",
                 ),
                 native_child_overlay: native_frame::CapabilityStatus::Supported,
                 cpu_snapshot: native_frame::CapabilityStatus::Supported,
                 supported_frames: vec![native_frame::NativeFrameKind::MetalTextureRef],
-                reason: "WkWebViewProducer slice A: WKWebView lifecycle (navigate / resize / set_offset) over an overlay surface; ScreenCaptureKit → IOSurface → MetalTextureRef capture pipeline is the next slice.",
+                reason: "WKWebViewProducer starts as a NativeChildOverlay. A Metal-backed host may explicitly start ScreenCaptureKit capture; only a successful start changes this producer to ImportedTexture.",
                 features: crate::wkwebview_features_for_producer(),
             },
             webview,

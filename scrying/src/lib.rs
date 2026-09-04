@@ -287,7 +287,9 @@ impl WebSurfaceCapabilities {
             SystemWebviewBackend::WebView2 => probe_webview2(host),
             SystemWebviewBackend::WkWebView => {
                 let imported_texture = match host.map(|h| h.backend) {
-                    Some(InteropBackend::Metal) => CapabilityStatus::Supported,
+                    Some(InteropBackend::Metal) => CapabilityStatus::Partial(
+                        "requires an explicit successful start_capture or start_capture_async call and Screen Recording permission",
+                    ),
                     Some(_) => CapabilityStatus::Unsupported(
                         crate::native_frame::UnsupportedReason::HostBackendMismatch,
                     ),
@@ -298,19 +300,15 @@ impl WebSurfaceCapabilities {
                 let features = wkwebview_features();
                 Self {
                     backend: SystemWebviewBackend::WkWebView,
-                    // ImportedTexture only when the host's wgpu
-                    // device is Metal — that's the only case
-                    // ScreenCaptureKit's IOSurface→MTLTexture path
-                    // can hand us a wgpu-importable handle.
-                    preferred_mode: match imported_texture {
-                        CapabilityStatus::Supported => WebSurfaceMode::ImportedTexture,
-                        _ => WebSurfaceMode::NativeChildOverlay,
-                    },
+                    // A Metal host makes capture possible, but it does not
+                    // make capture live. The producer switches this to
+                    // ImportedTexture only after ScreenCaptureKit starts.
+                    preferred_mode: WebSurfaceMode::NativeChildOverlay,
                     imported_texture,
                     native_child_overlay: CapabilityStatus::Supported,
                     cpu_snapshot: CapabilityStatus::Supported,
                     supported_frames: vec![NativeFrameKind::MetalTextureRef],
-                    reason: "WKWebView producer: ScreenCaptureKit → IOSurface → MTLTexture path is wired (requires Screen Recording permission and a Metal-backed host wgpu device); falls back to NativeChildOverlay if the host isn't on Metal, and CpuSnapshot via takeSnapshot: is always available.",
+                    reason: "WKWebView producer starts as a NativeChildOverlay. A Metal-backed host may explicitly start ScreenCaptureKit capture; only a successful start changes the live producer capability to ImportedTexture. CpuSnapshot via takeSnapshot: is available independently.",
                     features,
                 }
             }
