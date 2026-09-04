@@ -348,6 +348,59 @@ impl WgpuRender {
         self.last_imported = None;
     }
 
+    /// Present the host-owned wgpu surface without touching the producer's
+    /// latest-sample slot. Capture assertions use this as a compositor
+    /// heartbeat while their test driver remains the sole frame consumer.
+    pub fn present_without_acquire(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let surface_texture = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.device, &self.surface_config);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            other => return Err(format!("surface acquire failed: {other:?}").into()),
+        };
+        let surface_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("demo-mac-capture-heartbeat-encoder"),
+            });
+        {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("demo-mac-capture-heartbeat"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.05,
+                            g: 0.06,
+                            b: 0.10,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            drop(pass);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.present(surface_texture);
+        Ok(())
+    }
+
     pub fn render(
         &mut self,
         producer: &mut WkWebViewProducer,

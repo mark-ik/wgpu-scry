@@ -36,7 +36,7 @@ use scrying::{
     PointerEventKind, PointerInput, WebSurfaceProducer,
 };
 use winit::application::ApplicationHandler;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::Key;
@@ -1181,10 +1181,10 @@ impl ApplicationHandler for App {
                 {
                     let (w, h, at) = steps[state.resize_test_idx];
                     if elapsed >= at {
-                        let new_size = winit::dpi::PhysicalSize::new(w, h);
+                        let new_size = LogicalSize::new(w, h);
                         let _ = state.window.request_inner_size(new_size);
                         println!(
-                            "demo-mac: resize-test step {} → request inner_size = {}x{}",
+                            "demo-mac: resize-test step {} → request logical inner_size = {}x{}",
                             state.resize_test_idx, w, h
                         );
                         state.resize_test_idx += 1;
@@ -1205,6 +1205,9 @@ impl ApplicationHandler for App {
                             // path or the other depending on
                             // tick scheduling.
                             advance_capture_test(state, event_loop);
+                            // Keep the host-owned wgpu surface presenting while
+                            // the test remains the sole SCK frame consumer.
+                            state.window.request_redraw();
                         } else {
                             // Live: request a redraw to drive the wgpu loop.
                             state.window.request_redraw();
@@ -1344,7 +1347,12 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 if let Some(render) = state.render.as_mut() {
-                    if let Err(error) = render.render(&mut state.producer) {
+                    let result = if state.capture_test.is_some() {
+                        render.present_without_acquire()
+                    } else {
+                        render.render(&mut state.producer)
+                    };
+                    if let Err(error) = result {
                         eprintln!("demo-mac: render failed: {error}");
                     }
                 }
@@ -3933,7 +3941,10 @@ impl AppState {
         let capture_test = cli.capture_test.then(|| {
             let mut expected_dims = vec![(webview_size.width, webview_size.height)];
             if let Some(steps) = resize_test_steps.as_ref() {
-                expected_dims.extend(steps.iter().map(|(width, height, _)| (*width / 2, *height)));
+                let scale_factor = window.scale_factor();
+                expected_dims.extend(steps.iter().map(|(width, height, _)| {
+                    capture_webview_size_for_logical_window(*width, *height, scale_factor)
+                }));
                 expected_dims.sort_unstable();
                 expected_dims.dedup();
             }
@@ -4029,5 +4040,35 @@ impl AppState {
             capture_test,
             started_at: Instant::now(),
         })
+    }
+}
+
+fn capture_webview_size_for_logical_window(
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+) -> (u32, u32) {
+    let physical = LogicalSize::new(width, height).to_physical::<u32>(scale_factor);
+    (physical.width / 2, physical.height)
+}
+
+#[cfg(test)]
+mod capture_size_tests {
+    use super::capture_webview_size_for_logical_window;
+
+    #[test]
+    fn capture_resize_expectations_follow_display_scale() {
+        assert_eq!(
+            capture_webview_size_for_logical_window(1280, 800, 1.0),
+            (640, 800)
+        );
+        assert_eq!(
+            capture_webview_size_for_logical_window(1280, 800, 2.0),
+            (1280, 1600)
+        );
+        assert_eq!(
+            capture_webview_size_for_logical_window(768, 600, 2.0),
+            (768, 1200)
+        );
     }
 }
