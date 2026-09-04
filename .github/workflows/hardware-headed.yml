@@ -1,18 +1,22 @@
 name: headed hardware
 
+# This lane drives real GPUs and real system webviews on self-hosted, headed
+# machines. It was never a per-commit gate in practice: over the sampled window
+# it completed green twice, was cancelled six times by its own concurrency
+# group, and failed once — nine runs, two useful badges. The path filters that
+# used to narrow the push trigger are gone with it.
+#
+# It now runs weekly and on demand. Run it by hand before a release, or after
+# touching a producer or demo, with:
+#   gh workflow run hardware-headed.yml
+#
+# Branch protection must NOT list these jobs as required checks.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "scrying/**"
-      - "demo-win/**"
-      - "demo-mac/**"
-      - "demo-wpe/**"
-      - "scripts/test-win.ps1"
-      - "scripts/test-mac.sh"
-      - ".github/workflows/hardware-headed.yml"
-      - "Cargo.toml"
-      - "Cargo.lock"
+  schedule:
+    # Staggered against the sibling hardware lanes so the four physical
+    # machines are not contended: wgpu-weld headed 05:23 Sun and parity 07:23
+    # Sun, this one 09:23 Sun, wgpu-graft interop 11:23 Sun.
+    - cron: "23 9 * * 0"
   workflow_dispatch:
 
 permissions:

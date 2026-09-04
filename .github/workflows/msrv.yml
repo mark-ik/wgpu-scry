@@ -1,78 +1,33 @@
 name: scrying MSRV
 
+# This is the publishable `scrying` crate's MSRV gate. The demo workspace and
+# the headed hardware workflows intentionally retain their Rust 1.97.1 lane.
+#
+# MSRV is a promise made at publication, so it is verified when a release is
+# cut and on demand rather than on every push. The path filters that used to
+# narrow the push trigger are gone with it.
+
 on:
   push:
-    branches: [main]
-    paths:
-      - "scrying/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/msrv.yml"
-  pull_request:
-    paths:
-      - "scrying/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/msrv.yml"
+    tags: ["v*", "scrying-v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: scrying-msrv-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
-# This is the publishable `scrying` crate's MSRV gate. The demo workspace and
-# headed hardware workflows intentionally retain their Rust 1.97.1 lane.
 jobs:
+  # Windows, macOS, and the Linux public API without an installed native
+  # engine, each at wgpu-28/29/30. This was the `platform-api` job's nine-row
+  # include list; the shared matrix produces the same nine cells. Each Linux
+  # engine feature is compiled in its own native-family job below.
   platform-api:
-    name: Rust 1.92 / ${{ matrix.name }} / ${{ matrix.wgpu }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-            wgpu: wgpu-28
-          - name: Windows
-            os: windows-latest
-            wgpu: wgpu-29
-          - name: Windows
-            os: windows-latest
-            wgpu: wgpu-30
-          - name: macOS
-            os: macos-latest
-            wgpu: wgpu-28
-          - name: macOS
-            os: macos-latest
-            wgpu: wgpu-29
-          - name: macOS
-            os: macos-latest
-            wgpu: wgpu-30
-          # This is the Linux public API without an installed native engine.
-          # Each engine feature is compiled in its own native-family job below.
-          - name: Linux shell
-            os: ubuntu-latest
-            wgpu: wgpu-28
-          - name: Linux shell
-            os: ubuntu-latest
-            wgpu: wgpu-29
-          - name: Linux shell
-            os: ubuntu-latest
-            wgpu: wgpu-30
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.92.0
-      - name: Check the publishable library row
-        run: >-
-          cargo check --locked -p scrying --lib --no-default-features
-          --features ${{ matrix.wgpu }}
+    uses: merely-made/.github/.github/workflows/wgpu-msrv.yml@main
+    with:
+      crate: scrying
+      toolchain: 1.92.0
 
   linux-webkitgtk-fallback:
     name: Rust 1.92 / Linux / WebKitGTK 4.1 fallback

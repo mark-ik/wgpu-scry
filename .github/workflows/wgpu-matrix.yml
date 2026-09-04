@@ -5,31 +5,30 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  check:
-    name: ${{ matrix.os }} / ${{ matrix.wgpu }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        wgpu: [wgpu-28, wgpu-29, wgpu-30]
-    env:
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --locked -p scrying --lib --no-default-features --features ${{ matrix.wgpu }}
-
-  host-wgpu-30:
-    name: Windows wgpu 30 hosts
-    runs-on: windows-latest
-    env:
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Check portable host and real WebView2 demo
-        run: cargo check --locked -p demo-scrying-winit -p demo-win
+  # ubuntu/macOS/Windows x wgpu-28/29/30 `cargo check` of the publishable
+  # library row, exactly as before, with one change: the toolchain now comes
+  # from rust-toolchain.toml rather than resolving `stable` at run time.
+  #
+  # run-clippy and run-fmt are deliberately false. This repository is not
+  # clippy-clean or rustfmt-clean today, and turning either on here would land
+  # a red badge that says nothing about the commit that triggered it. Flipping
+  # them to true is a one-line change once the tree is clean; see wgpu-weld's
+  # wgpu-matrix.yml, which has both on.
+  gate:
+    uses: merely-made/.github/.github/workflows/wgpu-check.yml@main
+    with:
+      crate: scrying
+      run-clippy: false
+      run-fmt: false
+      # The library unit tests run under test-linux.yml and test-mac.yml, with
+      # the system packages and Xvfb they need. Do not duplicate them here.
+      test-row: ""
+      rustflags: ""
+      # Was the `host-wgpu-30` job: the portable host and the real WebView2
+      # demo, Windows only.
+      extra-packages: -p demo-scrying-winit -p demo-win
+      extra-packages-os: '["windows-latest"]'

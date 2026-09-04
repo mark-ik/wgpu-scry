@@ -1,0 +1,11 @@
+[toolchain]
+# This repository had no pin, so hosted CI resolved `stable` on every run and a
+# Rust release could redden a green tree with no commit behind it. 1.97.1 is
+# the version this repository already builds with: it is what the headed
+# hardware lanes have pinned via RUSTUP_TOOLCHAIN, what wgpu-weld and
+# wgpu-graft pin, and what the development machine runs.
+#
+# The publishable `scrying` crate's MSRV is 1.92.0 and is verified separately
+# by .github/workflows/msrv.yml. This pin is the development and CI toolchain,
+# not the MSRV, and it moves with stable.
+channel = "1.97.1"
