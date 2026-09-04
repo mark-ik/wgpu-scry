@@ -30,13 +30,15 @@ jobs:
   windows-webview2:
     name: NVIDIA WebView2 assertion battery
     runs-on: [self-hosted, wgpu-hardware, nvidia, windows-x64, headed]
-    timeout-minutes: 60
+    timeout-minutes: 180
     env:
       CARGO_TARGET_DIR: C:\Users\mark_\Code\targets\wgpu-scry-hardware
       RUSTUP_TOOLCHAIN: 1.97.1
       WGPU_BACKEND: dx12
 
     steps:
+      - name: Serialize host hardware use
+        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@ab70a66e625f15ae1b369bf34502fe6f7f7625a7
       - uses: actions/checkout@v4
 
       - name: Assert the provisioned toolchain and adapter
@@ -57,7 +59,7 @@ jobs:
   metal-m4:
     name: Apple M4 WKWebView and ScreenCaptureKit battery
     runs-on: [self-hosted, wgpu-hardware, metal, macos-arm64, m4, headed]
-    timeout-minutes: 50
+    timeout-minutes: 170
     env:
       CARGO_TARGET_DIR: /Users/markik/Code/targets/wgpu-scry-hardware
       CAPTURE: "1"
@@ -65,6 +67,8 @@ jobs:
       VISIBLE: "1"
 
     steps:
+      - name: Serialize host hardware use
+        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@ab70a66e625f15ae1b369bf34502fe6f7f7625a7
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
       - name: Run WKWebView assertions including live capture and resize
@@ -73,7 +77,7 @@ jobs:
   metal-intel:
     name: Intel iMac WKWebView and ScreenCaptureKit battery
     runs-on: [self-hosted, wgpu-hardware, metal, macos-x64, intel-mac, headed]
-    timeout-minutes: 50
+    timeout-minutes: 170
     env:
       CARGO_TARGET_DIR: /Users/markik/Code/targets/wgpu-scry-hardware
       CAPTURE: "1"
@@ -81,6 +85,8 @@ jobs:
       VISIBLE: "1"
 
     steps:
+      - name: Serialize host hardware use
+        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@ab70a66e625f15ae1b369bf34502fe6f7f7625a7
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
       - name: Run WKWebView assertions including live capture and resize
@@ -89,7 +95,7 @@ jobs:
   radv-wpe:
     name: RADV WPE to Vulkan pixel gate
     runs-on: [self-hosted, wgpu-hardware, radv, wayland, headed]
-    timeout-minutes: 35
+    timeout-minutes: 155
     env:
       CARGO_TARGET_DIR: /home/markik/Code/targets/wgpu-scry-hardware
       XDG_RUNTIME_DIR: /run/user/1000
@@ -101,6 +107,8 @@ jobs:
       WGPU_BACKEND: vulkan
 
     steps:
+      - name: Serialize host hardware use
+        uses: merely-made/wgpu-graft/.github/actions/host-hardware-lock@ab70a66e625f15ae1b369bf34502fe6f7f7625a7
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
 
