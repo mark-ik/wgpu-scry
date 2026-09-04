@@ -492,29 +492,13 @@ impl WebSurfaceProducer for WpeProducer {
         }
     }
 
-    /// Resize the producer's render target.
+    /// Report resize as unsupported until the headless WPE backend can change
+    /// its effective render-target dimensions.
     ///
-    /// Drives the resize through both `wpe_toplevel_resize` (the
-    /// imperative on non-headless toplevels) and `wpe_view_resized` (the
-    /// view-side notify that, on non-headless backends, propagates the
-    /// new size to WebKit's render target and fires a fresh
-    /// `buffer-rendered`).
-    ///
-    /// **WPE 2.52.3 headless limitation:** the headless toplevel's
-    /// `resize` vfunc is unimplemented — `wpe_toplevel_resize` returns
-    /// TRUE but the underlying dimensions don't change, and the next
-    /// `DmaBufImage` keeps coming back at the headless default
-    /// (observed 1024×768). `wpe_view_resized` does trigger a fresh
-    /// repaint (so `buffer-rendered` fires), but the repaint is still
-    /// at the old size. Until a non-headless WPE producer lands, or we
-    /// subclass `WPEToplevel` to implement `resize` ourselves, callers
-    /// should treat `self.size` after `resize` as "what we asked for"
-    /// rather than "what the GPU will render" — read the actual size
-    /// off the most recent `DmaBufImage::size`.
-    ///
-    /// macOS/Windows and the WebKitGTK/WebKit6 producers don't have
-    /// this limitation; the call shape here matches what they'll need
-    /// once their resize paths land.
+    /// WPE 2.52.3's headless toplevel accepts `wpe_toplevel_resize`, but the
+    /// next `DmaBufImage` retains the backend's fixed dimensions (observed as
+    /// 1024x768). Returning success would make `self.size` disagree with the
+    /// frame presented to the host.
     fn resize(&mut self, size: PhysicalSize<u32>) -> Result<(), WebSurfaceError> {
         if size.width == 0 || size.height == 0 {
             return Err(WebSurfaceError::Platform(format!(
@@ -522,39 +506,9 @@ impl WebSurfaceProducer for WpeProducer {
                 size.width, size.height
             )));
         }
-        #[cfg(feature = "wpe")]
-        {
-            // SAFETY: handles.toplevel + handles.view are non-null per the
-            // construction guard in build_producer_view; transfer-none
-            // borrows, valid for the producer's lifetime.
-            let ok = unsafe {
-                super::ffi::wpe_toplevel_resize(
-                    self.handles.toplevel,
-                    size.width as std::os::raw::c_int,
-                    size.height as std::os::raw::c_int,
-                )
-            };
-            if ok == 0 {
-                return Err(WebSurfaceError::Platform(format!(
-                    "wpe_toplevel_resize returned FALSE for {}x{}",
-                    size.width, size.height
-                )));
-            }
-            // The toplevel's `resize` vfunc on the headless backend is a
-            // no-op — the View, not the Toplevel, is what WebKit reads
-            // for the render-target dimensions. Notify the View
-            // explicitly so its `resized` signal fires and WebKit
-            // re-renders at the new size.
-            unsafe {
-                super::ffi::wpe_view_resized(
-                    self.handles.view,
-                    size.width as std::os::raw::c_int,
-                    size.height as std::os::raw::c_int,
-                );
-            }
-        }
-        self.size = size;
-        Ok(())
+        Err(WebSurfaceError::Unsupported(
+            "the WPE 2.52 headless backend has a fixed render-target size",
+        ))
     }
 
     fn set_offset(&mut self, x: f32, y: f32) -> Result<(), WebSurfaceError> {

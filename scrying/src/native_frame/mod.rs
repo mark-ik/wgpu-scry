@@ -247,9 +247,8 @@ pub struct MetalTextureRef {
     pub producer_sync: SyncMechanism,
     /// Retained `MTLTexture` custody. Apple platforms only.
     #[cfg(target_os = "macos")]
-    pub(crate) raw_metal_texture: objc2::rc::Retained<
-        objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>,
-    >,
+    pub(crate) raw_metal_texture:
+        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>>,
     /// `MTLSharedEvent` value the producer signals at after the
     /// per-frame Metal blit completes. Consumers that opt in to
     /// explicit synchronization (`producer_sync ==
@@ -675,8 +674,7 @@ impl TextureImporter for WgpuTextureImporter {
         _options: &ImportOptions,
     ) -> Result<ImportedTexture, InteropError> {
         let producer_sync = frame.producer_sync();
-        self.synchronizer
-            .producer_complete(&frame, producer_sync)?;
+        self.synchronizer.producer_complete(&frame, producer_sync)?;
 
         let imported = match frame {
             NativeFrame::Dx12SharedTexture(frame) => import_dx12_shared_texture(frame, &self.host),
@@ -721,26 +719,20 @@ fn import_dx12_shared_texture(
         // Delegate the generic OpenSharedHandle -> wgpu import to grafting (the
         // shared interop core). The frame owns a shared RAII custody token, and
         // the Graft frame consumes a clone of that token for the import.
+        let producer_sync = match frame.producer_sync {
+            SyncMechanism::ExplicitFence => grafting::SyncMechanism::ExplicitFence,
+            SyncMechanism::None => grafting::SyncMechanism::None,
+            other => return Err(InteropError::UnsupportedSynchronization(other)),
+        };
         let metadata = grafting::FrameMetadata {
             size: frame.size,
             format: frame.format,
             generation: frame.generation,
-            producer_sync: match frame.producer_sync {
-                SyncMechanism::ExplicitFence => grafting::SyncMechanism::ExplicitFence,
-                SyncMechanism::None => grafting::SyncMechanism::None,
-                // These mechanisms cannot occur on a DX12 frame, but retain
-                // their explicit nature if a custom producer supplies one.
-                SyncMechanism::ExplicitExternalSemaphore | SyncMechanism::ExplicitMetalEvent => {
-                    grafting::SyncMechanism::ExplicitExternalSemaphore
-                }
-            },
+            producer_sync,
         };
         let g_host = grafting::HostWgpuContext::new(host.device.clone(), host.queue.clone());
-        let g_frame = grafting::Dx12SharedTexture::new(
-            metadata,
-            frame.resource.clone(),
-            frame.fence_value,
-        );
+        let g_frame =
+            grafting::Dx12SharedTexture::new(metadata, frame.resource.clone(), frame.fence_value);
         let texture = grafting::import_dx12_shared_texture(g_frame, &g_host)
             .map_err(|e| InteropError::Dx12(e.to_string()))?;
 

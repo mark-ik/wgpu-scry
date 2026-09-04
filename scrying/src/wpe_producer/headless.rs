@@ -29,8 +29,8 @@ use std::collections::HashMap;
 use std::os::fd::{FromRawFd, OwnedFd};
 
 use super::ffi;
-use crate::{UrlSchemeHandlerFn, WebSurfaceError};
 use crate::native_frame::{DmaBufImage, DmaBufPlane, SyncMechanism};
+use crate::{UrlSchemeHandlerFn, WebSurfaceError};
 use glib::prelude::*;
 use glib::translate::{IntoGlib, from_glib, from_glib_full};
 use std::os::raw::c_char;
@@ -82,8 +82,7 @@ pub(super) fn pump_until(
 /// which happens when the producer drops).
 pub(super) fn build_producer_view(
     url_schemes: HashMap<String, UrlSchemeHandlerFn>,
-) -> Result<(glib::Object, *mut ffi::WPEView, *mut ffi::WPEToplevel), WebSurfaceError>
-{
+) -> Result<(glib::Object, *mut ffi::WPEView, *mut ffi::WPEToplevel), WebSurfaceError> {
     // 1. Self-owned headless display (no compositor surface).
     let display = unsafe { ffi::wpe_display_headless_new() };
     if display.is_null() {
@@ -205,7 +204,8 @@ pub(super) fn build_producer_view(
     if toplevel.is_null() {
         return Err(WebSurfaceError::Platform(
             "wpe_view_get_toplevel returned null on the headless display; \
-             resize would always fail".into(),
+             resize would always fail"
+                .into(),
         ));
     }
 
@@ -313,8 +313,7 @@ pub(super) fn connect_buffer_rendered(
 
     // GType of WPEBufferDMABuf, resolved once and captured by the closure so the
     // per-frame downcast is a cheap `is_a` check.
-    let dmabuf_gtype: glib::Type =
-        unsafe { from_glib(ffi::wpe_buffer_dma_buf_get_type()) };
+    let dmabuf_gtype: glib::Type = unsafe { from_glib(ffi::wpe_buffer_dma_buf_get_type()) };
 
     // The `view` raw pointer is `Copy` and moved into the closure; the closure
     // is `'static` (no borrow of `view_obj`). WPE invokes `buffer-rendered` on
@@ -363,12 +362,8 @@ mod tests {
         assert_eq!(unsafe { libc::pipe(source.as_mut_ptr()) }, 0);
         let first_duplicate = Cell::new(-1);
         let calls = Cell::new(0);
-        let result = super::duplicate_plane_fds(
-            vec![
-                (source[0], 0, 16),
-                (source[0], 16, 16),
-            ],
-            |fd| {
+        let result =
+            super::duplicate_plane_fds(vec![(source[0], 0, 16), (source[0], 16, 16)], |fd| {
                 let call = calls.get();
                 calls.set(call + 1);
                 if call == 0 {
@@ -378,8 +373,7 @@ mod tests {
                 } else {
                     -1
                 }
-            },
-        );
+            });
 
         assert!(result.is_none());
         assert!(first_duplicate.get() >= 0);
@@ -396,8 +390,8 @@ mod tests {
 
     /// End-to-end runtime smoke for 4c.3: construct a headless producer,
     /// navigate to an inline page, assert load completes, acquire a real
-    /// `DmaBufImage`, then resize and acquire another frame. Strict
-    /// superset of the 4c.2 smoke + adds nav + resize coverage.
+    /// `DmaBufImage`, then verify that the fixed-size headless backend rejects
+    /// resize rather than reporting a size it did not apply.
     ///
     /// The one-WPE-per-process constraint (see module doc) means this MUST
     /// remain the only ignored runtime test in this binary.
@@ -426,7 +420,9 @@ mod tests {
             nav_events.push(e);
         }
         assert!(
-            nav_events.iter().any(|e| matches!(e, NavigationEvent::Completed { success: true, .. })),
+            nav_events
+                .iter()
+                .any(|e| matches!(e, NavigationEvent::Completed { success: true, .. })),
             "expected a successful Completed event; got {:?}",
             nav_events
         );
@@ -443,56 +439,34 @@ mod tests {
             .expect("a first frame should arrive within 5s of navigate completion");
         }
 
-        let frame_1 = producer.acquire_frame().expect("first frame after navigate");
+        let frame_1 = producer
+            .acquire_frame()
+            .expect("first frame after navigate");
         let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img1)) = frame_1 else {
             panic!("expected a DMABUF frame");
         };
-        assert!(img1.size.width > 0 && img1.size.height > 0, "non-zero size 1");
+        assert!(
+            img1.size.width > 0 && img1.size.height > 0,
+            "non-zero size 1"
+        );
         assert!(!img1.planes().is_empty(), "at least one plane");
         assert!(img1.buffer_count() > 0, "owned descriptor buffer present");
         assert_eq!(img1.producer_sync, SyncMechanism::None);
         eprintln!(
             "smoke#1 (post-nav): {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
-            img1.size.width, img1.size.height, img1.drm_format, img1.drm_modifier, img1.planes().len()
+            img1.size.width,
+            img1.size.height,
+            img1.drm_format,
+            img1.drm_modifier,
+            img1.planes().len()
         );
 
-        // --- 2. Resize + assert next frame ---
-        producer
-            .resize(PhysicalSize::new(512, 384))
-            .expect("resize to 512x384");
-
-        // Pump up to 5s for a fresh frame after resize. WPE may not auto-paint
-        // on resize alone — the fallback below renavigates to force one.
-        let ctx = producer.handles.main_context.clone();
-        let pending = producer.pending_frame.clone();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let arrived = super::pump_until(&ctx, deadline, || {
-            pending.lock().map(|s| s.is_some()).unwrap_or(false)
-        }).is_ok();
-
-        if !arrived {
-            eprintln!("(resize did not auto-trigger a buffer-rendered; renavigating)");
-            producer
-                .navigate_to_string(
-                    "<body style='margin:0;background:#22aa22'></body>",
-                    std::time::Duration::from_secs(5),
-                )
-                .expect("renavigate after resize");
-            // Drain post-renavigate events.
-            while let Some(_e) = producer.poll_navigation_event() {}
-        }
-
-        let frame_2 = producer.acquire_frame().expect("second frame after resize");
-        let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img2)) = frame_2 else {
-            panic!("expected a DMABUF frame");
-        };
-        assert!(img2.size.width > 0 && img2.size.height > 0, "non-zero size 2");
-        eprintln!(
-            "smoke#2 (post-resize): {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
-            img2.size.width, img2.size.height, img2.drm_format, img2.drm_modifier, img2.planes().len()
-        );
-        // Soft assertion: the headless toplevel may coerce dimensions. The
-        // diagnostic eprintln makes the actual size visible. Hard contract:
-        // resize succeeded AND the seam still produces a valid frame.
+        // --- 2. Resize honesty ---
+        let requested = PhysicalSize::new(512, 384);
+        assert!(matches!(
+            producer.resize(requested),
+            Err(crate::WebSurfaceError::Unsupported(_))
+        ));
+        assert_eq!(producer.size, PhysicalSize::new(256, 256));
     }
 }

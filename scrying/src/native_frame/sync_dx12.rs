@@ -48,7 +48,13 @@ pub struct Dx12FenceSynchronizer {
     next_value: AtomicU64,
 }
 
+// SAFETY: D3D12 device-child interfaces are free-threaded COM objects, the
+// shared HANDLE is only closed by this object's Drop, and `next_value` is the
+// only mutable Rust state. Queue Wait/Signal operations are thread-safe under
+// the D3D12 API contract.
 unsafe impl Send for Dx12FenceSynchronizer {}
+// SAFETY: see the Send rationale above. Shared access only invokes D3D12's
+// free-threaded queue/fence methods and atomic value allocation.
 unsafe impl Sync for Dx12FenceSynchronizer {}
 
 impl Dx12FenceSynchronizer {

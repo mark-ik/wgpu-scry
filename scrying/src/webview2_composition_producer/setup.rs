@@ -34,6 +34,50 @@ pub struct CompositionRoot {
     owned_host: Option<OwnedHostWindow>,
 }
 
+/// Rolls back the externally visible parts of an attached producer while its
+/// fallible construction is still in progress.
+struct PendingProducerAttachment {
+    composition_root: Arc<CompositionRoot>,
+    pane_container: ContainerVisual,
+    controller: Option<ICoreWebView2Controller>,
+    armed: bool,
+}
+
+impl PendingProducerAttachment {
+    fn new(composition_root: Arc<CompositionRoot>, pane_container: ContainerVisual) -> Self {
+        Self {
+            composition_root,
+            pane_container,
+            controller: None,
+            armed: true,
+        }
+    }
+
+    fn retain_controller(&mut self, controller: &ICoreWebView2Controller) {
+        self.controller = Some(controller.clone());
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingProducerAttachment {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(controller) = &self.controller {
+            unsafe {
+                let _ = controller.Close();
+            }
+        }
+        if let Ok(children) = self.composition_root.root_visual.Children() {
+            let _ = children.Remove(&self.pane_container);
+        }
+    }
+}
+
 impl CompositionRoot {
     /// Create the shared composition tree for `parent_hwnd` and bind it to the
     /// HWND's (single) `DesktopWindowTarget`.
@@ -387,18 +431,21 @@ impl WebView2CompositionProducer {
             .map_err(platform("root.Children() (pane)"))?
             .InsertAtTop(&pane_container)
             .map_err(platform("Children::InsertAtTop (pane)"))?;
+        let mut pending_attachment =
+            PendingProducerAttachment::new(composition_root.clone(), pane_container.clone());
 
         let environment = create_environment(&config.user_data_dir)?;
         let composition_controller =
             create_composition_controller(&environment, parent_hwnd, config.non_persistent)?;
+        let controller: ICoreWebView2Controller = composition_controller
+            .cast()
+            .map_err(platform("composition controller cast"))?;
+        pending_attachment.retain_controller(&controller);
         unsafe {
             composition_controller
                 .SetRootVisualTarget(&webview_visual)
                 .map_err(platform("SetRootVisualTarget"))?;
         }
-        let controller: ICoreWebView2Controller = composition_controller
-            .cast()
-            .map_err(platform("composition controller cast"))?;
         unsafe {
             controller
                 .SetBounds(RECT {
@@ -494,7 +541,7 @@ impl WebView2CompositionProducer {
                 cookie_change_handler.clone(),
             )?;
 
-        Ok(Self {
+        let producer = Self {
             parent_hwnd,
             size: config.size,
             frame_timeout: config.frame_timeout,
@@ -542,7 +589,9 @@ impl WebView2CompositionProducer {
             web_resource_requested_token: None,
             accelerator_key_pressed_token,
             cursor_changed_token,
-        })
+        };
+        pending_attachment.disarm();
+        Ok(producer)
     }
 
     /// Move this producer to `parent_hwnd` without recreating the WebView2
