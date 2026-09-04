@@ -726,11 +726,11 @@ pub(crate) fn run_platform_composition_visual_probe(
         validate_platform_media_capture_observability(&mut producer)?;
     }
     if cli.capture_test {
-        validate_platform_capture(&mut producer, host)?;
+        validate_platform_capture(&mut producer, host, fence_synchronizer)?;
         return Ok(None);
     }
     if cli.scale_test {
-        validate_platform_scale_resize(&mut producer, host)?;
+        validate_platform_scale_resize(&mut producer, host, fence_synchronizer)?;
         return Ok(None);
     }
     if cli.profile_test {

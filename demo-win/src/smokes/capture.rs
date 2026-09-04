@@ -9,10 +9,11 @@ use super::super::*;
 pub(crate) fn validate_platform_capture(
     producer: &mut scrying::PlatformWebSurfaceProducer,
     host: &HostWgpuContext,
+    fence_synchronizer: &Arc<scrying::Dx12FenceSynchronizer>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let captured = producer.acquire_full_frame()?;
     let content_size = captured.content_size;
-    let imported = import_and_consume(host, captured)?;
+    let imported = import_and_consume(host, captured, fence_synchronizer)?;
     let metrics = producer.capture_metrics();
     let color_pipeline = producer.capture_color_pipeline();
     let texture_format = producer.capture_texture_format();
@@ -37,6 +38,7 @@ pub(crate) fn validate_platform_capture(
 pub(crate) fn validate_platform_scale_resize(
     producer: &mut scrying::PlatformWebSurfaceProducer,
     host: &HostWgpuContext,
+    fence_synchronizer: &Arc<scrying::Dx12FenceSynchronizer>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let samples = [
         winit::dpi::PhysicalSize::new(315, 195),
@@ -46,7 +48,7 @@ pub(crate) fn validate_platform_scale_resize(
         producer.resize(target)?;
         let captured = producer.acquire_full_frame()?;
         let content_size = captured.content_size;
-        let imported = import_and_consume(host, captured)?;
+        let imported = import_and_consume(host, captured, fence_synchronizer)?;
         if imported.size != target {
             return Err(format!(
                 "scale-test imported {}x{} after resize to {}x{}",
@@ -75,10 +77,14 @@ pub(crate) fn validate_platform_scale_resize(
 fn import_and_consume(
     host: &HostWgpuContext,
     captured: scrying::webview2_composition_producer::WebView2CompositionFrame,
+    fence_synchronizer: &Arc<scrying::Dx12FenceSynchronizer>,
 ) -> Result<scrying::ImportedTexture, Box<dyn std::error::Error>> {
     let WebSurfaceFrame::Native(native_frame) = captured.frame else {
         return Err("WebView2 composition producer did not emit a native frame".into());
     };
-    let importer = WgpuTextureImporter::new(host.clone());
+    let importer = WgpuTextureImporter::with_synchronizer(
+        host.clone(),
+        Box::new(Arc::clone(fence_synchronizer)),
+    );
     Ok(importer.import_frame(native_frame, &ImportOptions::default())?)
 }
