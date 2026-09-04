@@ -46,8 +46,8 @@ use crate::{
 use super::super::helpers::pump_until;
 use super::super::producer::WkWebViewProducer;
 use super::{
-    CaptureSignal, CaptureState, LatestSample, QueuedSampleBuffer, StreamErrorDelegate,
-    StreamOutputDelegate, host_window_pixel_size, make_stream_configuration,
+    CaptureDiagnosticsState, CaptureSignal, CaptureState, LatestSample, QueuedSampleBuffer,
+    StreamErrorDelegate, StreamOutputDelegate, host_window_pixel_size, make_stream_configuration,
 };
 
 impl WkWebViewProducer {
@@ -221,6 +221,7 @@ impl WkWebViewProducer {
             stream_error,
             samples_received,
             samples_consumed,
+            diagnostics: Arc::new(CaptureDiagnosticsState::default()),
             last_emitted: None,
             generation: AtomicU64::new(0),
             // The initial config was applied synchronously by
@@ -400,7 +401,13 @@ impl WkWebViewProducer {
         let sample = match capture.latest.lock() {
             Ok(mut slot) => match slot.take() {
                 Some(QueuedSampleBuffer(buffer)) => buffer,
-                None => return Ok(None),
+                None => {
+                    capture
+                        .diagnostics
+                        .no_latest_sample
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Ok(None);
+                }
             },
             Err(_) => {
                 return Err(WebSurfaceError::Platform(
@@ -416,6 +423,10 @@ impl WkWebViewProducer {
         // yet" rather than an error so the consumer just polls
         // again on the next tick.
         let Some(image_buffer) = (unsafe { sample.image_buffer() }) else {
+            capture
+                .diagnostics
+                .sample_without_image_payload
+                .fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         };
         // CVPixelBuffer is a type alias for CVImageBuffer in objc2-core-video,
@@ -432,6 +443,9 @@ impl WkWebViewProducer {
 
         let source_width = CVPixelBufferGetWidth(pixel_buffer);
         let source_height = CVPixelBufferGetHeight(pixel_buffer);
+        capture
+            .diagnostics
+            .record_source_size(PhysicalSize::new(source_width as u32, source_height as u32));
 
         // Drop ambiguous in-flight samples while a configuration
         // change is in flight. `config_revision` ticks the moment
@@ -452,6 +466,10 @@ impl WkWebViewProducer {
             .applied_config_revision
             .load(std::sync::atomic::Ordering::Relaxed);
         if applied < revision {
+            capture
+                .diagnostics
+                .configuration_revision_pending
+                .fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         }
 
@@ -465,9 +483,16 @@ impl WkWebViewProducer {
             WebSurfaceError::Platform("WKWebView's host window vanished mid-capture".into())
         })?;
         let expected_dims = super::host_window_pixel_size(&host_window_for_dims);
+        capture
+            .diagnostics
+            .record_expected_source_size(expected_dims);
         if source_width as u32 != expected_dims.width
             || source_height as u32 != expected_dims.height
         {
+            capture
+                .diagnostics
+                .source_dimension_mismatch
+                .fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         }
 
@@ -517,6 +542,10 @@ impl WkWebViewProducer {
         let crop_w = crop_w_raw.min(source_width.saturating_sub(crop_x));
         let crop_h = crop_h_raw.min(source_height.saturating_sub(crop_y));
         if crop_w == 0 || crop_h == 0 {
+            capture
+                .diagnostics
+                .empty_crop
+                .fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         }
 

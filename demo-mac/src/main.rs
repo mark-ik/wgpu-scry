@@ -3034,6 +3034,7 @@ fn finalize_capture_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
         return;
     };
     let mut failures = test.failures;
+    let diagnostics = state.producer.capture_diagnostics();
     for expected in &test.expected_dims {
         let count = test
             .frame_dims
@@ -3070,6 +3071,21 @@ fn finalize_capture_test(state: &mut AppState, event_loop: &ActiveEventLoop) {
         for f in &failures {
             eprintln!("  - {f}");
         }
+        eprintln!(
+            "  - pre-import frame diagnostics: no-latest-sample={}, no-image-payload={}, config-revision-pending={}, source-dimension-mismatch={}, empty-crop={}",
+            diagnostics.no_latest_sample,
+            diagnostics.sample_without_image_payload,
+            diagnostics.configuration_revision_pending,
+            diagnostics.source_dimension_mismatch,
+            diagnostics.empty_crop,
+        );
+        eprintln!(
+            "  - capture revisions: requested={}, applied={}; last source dimensions={:?}, expected host dimensions={:?}",
+            diagnostics.requested_config_revision,
+            diagnostics.applied_config_revision,
+            diagnostics.last_source_size,
+            diagnostics.last_expected_source_size,
+        );
         std::process::exit(1);
     }
 }

@@ -31,8 +31,8 @@ use crate::{HostWgpuContext, InteropBackend, WebSurfaceError, WebSurfaceMode};
 
 use super::super::producer::WkWebViewProducer;
 use super::{
-    AsyncMetalResources, CaptureMetrics, CaptureStartResources, CaptureState,
-    CaptureStateForMainThread, CaptureStatus, InProgressCaptureState, LatestSample,
+    AsyncMetalResources, CaptureDiagnosticsState, CaptureMetrics, CaptureStartResources,
+    CaptureState, CaptureStateForMainThread, CaptureStatus, InProgressCaptureState, LatestSample,
     PendingCaptureSlot, StreamErrorDelegate, StreamOutputDelegate, host_window_pixel_size,
     make_stream_configuration, write_pending,
 };
@@ -211,6 +211,7 @@ impl WkWebViewProducer {
                 let latest: Arc<LatestSample> = Arc::new(Mutex::new(None));
                 let samples_received = Arc::new(AtomicU64::new(0));
                 let samples_consumed = Arc::new(AtomicU64::new(0));
+                let diagnostics = Arc::new(CaptureDiagnosticsState::default());
                 let output_delegate =
                     StreamOutputDelegate::new(Arc::clone(&latest), Arc::clone(&samples_received));
                 let sample_queue = DispatchQueue::new("scrying.wkwebview.sck-sample", None);
@@ -250,6 +251,7 @@ impl WkWebViewProducer {
                     stream_error: Arc::clone(&stream_error),
                     samples_received: Arc::clone(&samples_received),
                     samples_consumed: Arc::clone(&samples_consumed),
+                    diagnostics: Arc::clone(&diagnostics),
                     config_revision,
                     applied_config_revision,
                     configuration_error,
@@ -277,6 +279,7 @@ impl WkWebViewProducer {
                         stream_error: Arc::clone(&parts.stream_error),
                         samples_received: Arc::clone(&parts.samples_received),
                         samples_consumed: Arc::clone(&parts.samples_consumed),
+                        diagnostics: Arc::clone(&parts.diagnostics),
                         last_emitted: None,
                         generation: AtomicU64::new(0),
                         config_revision: Arc::clone(&parts.config_revision),
@@ -386,6 +389,26 @@ impl WkWebViewProducer {
                 .samples_consumed
                 .load(std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// Snapshot the pre-import `Ok(None)` reasons for the live capture
+    /// stream. This diagnostic surface does not alter acquisition behavior.
+    ///
+    /// Returns [`super::CaptureDiagnostics::default`] when capture has not
+    /// started. The counters are safe to inspect from any thread, although
+    /// the producer increments them on its main-thread acquisition path.
+    pub fn capture_diagnostics(&self) -> super::CaptureDiagnostics {
+        let Some(capture) = self.capture.as_ref() else {
+            return super::CaptureDiagnostics::default();
+        };
+        capture.diagnostics.snapshot(
+            capture
+                .config_revision
+                .load(std::sync::atomic::Ordering::Acquire),
+            capture
+                .applied_config_revision
+                .load(std::sync::atomic::Ordering::Acquire),
+        )
     }
 
     fn install_capture_state(&mut self, state: CaptureState) {

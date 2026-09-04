@@ -97,7 +97,7 @@ mod ui_delegate;
 
 pub use crate::{UrlSchemeHandlerFn, UrlSchemeResponse};
 pub use api::FindOptions;
-pub use capture::{CaptureMetrics, CaptureStatus};
+pub use capture::{CaptureDiagnostics, CaptureMetrics, CaptureStatus};
 pub use config::WkWebViewProducerConfig;
 pub use cookie_observer::CookieChangeHandlerFn;
 pub use download_handler::DownloadHandlerFn;

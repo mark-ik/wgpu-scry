@@ -87,6 +87,93 @@ pub struct CaptureMetrics {
     pub samples_consumed: u64,
 }
 
+/// Why [`super::WkWebViewProducer::try_acquire_frame`] most recently had no
+/// importable frame while a ScreenCaptureKit stream was live.
+///
+/// This is intentionally separate from [`CaptureMetrics`]. Adding fields to
+/// that long-standing public struct would break consumers which construct it
+/// with a literal. This new snapshot is non-exhaustive so later diagnostic
+/// counters can be added without the same compatibility hazard.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct CaptureDiagnostics {
+    /// `try_acquire_frame` found no sample in the latest-sample slot.
+    pub no_latest_sample: u64,
+    /// The dequeued ScreenCaptureKit sample did not carry an image buffer.
+    pub sample_without_image_payload: u64,
+    /// A sample arrived while `updateConfiguration:` had a newer requested
+    /// revision than its last successful acknowledgement.
+    pub configuration_revision_pending: u64,
+    /// The captured IOSurface dimensions differed from the host window's
+    /// current expected pixel dimensions.
+    pub source_dimension_mismatch: u64,
+    /// The WKWebView crop rectangle lay wholly outside the captured source.
+    pub empty_crop: u64,
+    /// Revision requested from ScreenCaptureKit for the current stream.
+    pub requested_config_revision: u64,
+    /// Most recently successful ScreenCaptureKit configuration revision.
+    pub applied_config_revision: u64,
+    /// Dimensions of the most recently inspected captured IOSurface, when a
+    /// sample reached image-buffer inspection.
+    pub last_source_size: Option<PhysicalSize<u32>>,
+    /// Host-window dimensions used for the most recent dimension comparison.
+    pub last_expected_source_size: Option<PhysicalSize<u32>>,
+}
+
+#[derive(Default)]
+pub(super) struct CaptureDiagnosticsState {
+    no_latest_sample: AtomicU64,
+    sample_without_image_payload: AtomicU64,
+    configuration_revision_pending: AtomicU64,
+    source_dimension_mismatch: AtomicU64,
+    empty_crop: AtomicU64,
+    last_source_size: Mutex<Option<PhysicalSize<u32>>>,
+    last_expected_source_size: Mutex<Option<PhysicalSize<u32>>>,
+}
+
+impl CaptureDiagnosticsState {
+    pub(super) fn snapshot(
+        &self,
+        requested_config_revision: u64,
+        applied_config_revision: u64,
+    ) -> CaptureDiagnostics {
+        use std::sync::atomic::Ordering;
+
+        CaptureDiagnostics {
+            no_latest_sample: self.no_latest_sample.load(Ordering::Relaxed),
+            sample_without_image_payload: self.sample_without_image_payload.load(Ordering::Relaxed),
+            configuration_revision_pending: self
+                .configuration_revision_pending
+                .load(Ordering::Relaxed),
+            source_dimension_mismatch: self.source_dimension_mismatch.load(Ordering::Relaxed),
+            empty_crop: self.empty_crop.load(Ordering::Relaxed),
+            requested_config_revision,
+            applied_config_revision,
+            last_source_size: self.last_source_size.lock().ok().and_then(|size| *size),
+            last_expected_source_size: self
+                .last_expected_source_size
+                .lock()
+                .ok()
+                .and_then(|size| *size),
+        }
+    }
+
+    pub(super) fn record_source_size(&self, size: PhysicalSize<u32>) {
+        if let Ok(mut slot) = self.last_source_size.lock() {
+            *slot = Some(size);
+        }
+        if let Ok(mut slot) = self.last_expected_source_size.lock() {
+            *slot = None;
+        }
+    }
+
+    pub(super) fn record_expected_source_size(&self, size: PhysicalSize<u32>) {
+        if let Ok(mut slot) = self.last_expected_source_size.lock() {
+            *slot = Some(size);
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct CaptureSignal {
     /// `Some(Ok(()))` once `startCaptureWithCompletionHandler:` /
@@ -258,6 +345,7 @@ pub(super) struct InProgressCaptureState {
     pub(super) stream_error: Arc<Mutex<Option<String>>>,
     pub(super) samples_received: Arc<AtomicU64>,
     pub(super) samples_consumed: Arc<AtomicU64>,
+    pub(super) diagnostics: Arc<CaptureDiagnosticsState>,
     pub(super) config_revision: Arc<AtomicU64>,
     pub(super) applied_config_revision: Arc<AtomicU64>,
     pub(super) configuration_error: Arc<Mutex<Option<ConfigurationFailure>>>,
@@ -346,6 +434,10 @@ pub(super) struct CaptureState {
     /// when it returns `Ok(Some(...))` to the consumer. Read by
     /// [`super::WkWebViewProducer::capture_metrics`].
     pub(super) samples_consumed: Arc<AtomicU64>,
+    /// Counter and dimension snapshot updated on every pre-import
+    /// `Ok(None)` path. Kept separate from `CaptureMetrics` so existing
+    /// public callers retain source compatibility.
+    pub(super) diagnostics: Arc<CaptureDiagnosticsState>,
     /// Most-recently-emitted MTLTexture. The producer keeps it alive
     /// here because [`crate::native_frame::MetalTextureRef::raw_metal_texture`]
     /// is a raw pointer; the consumer's [`crate::native_frame`]
@@ -593,7 +685,9 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{ConfigurationFailure, complete_configuration_update};
+    use dpi::PhysicalSize;
+
+    use super::{CaptureDiagnosticsState, ConfigurationFailure, complete_configuration_update};
 
     #[test]
     fn failed_configuration_never_acknowledges_its_revision() {
@@ -647,5 +741,40 @@ mod tests {
 
         assert_eq!(applied.load(Ordering::Acquire), 9);
         assert_eq!(*failure.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn diagnostics_snapshot_distinguishes_pre_import_drop_paths() {
+        let diagnostics = CaptureDiagnosticsState::default();
+        diagnostics.no_latest_sample.fetch_add(2, Ordering::Relaxed);
+        diagnostics
+            .sample_without_image_payload
+            .fetch_add(3, Ordering::Relaxed);
+        diagnostics
+            .configuration_revision_pending
+            .fetch_add(5, Ordering::Relaxed);
+        diagnostics
+            .source_dimension_mismatch
+            .fetch_add(7, Ordering::Relaxed);
+        diagnostics.empty_crop.fetch_add(11, Ordering::Relaxed);
+        diagnostics.record_source_size(PhysicalSize::new(2048, 1536));
+        diagnostics.record_expected_source_size(PhysicalSize::new(2048, 1500));
+
+        let snapshot = diagnostics.snapshot(9, 8);
+        assert_eq!(snapshot.no_latest_sample, 2);
+        assert_eq!(snapshot.sample_without_image_payload, 3);
+        assert_eq!(snapshot.configuration_revision_pending, 5);
+        assert_eq!(snapshot.source_dimension_mismatch, 7);
+        assert_eq!(snapshot.empty_crop, 11);
+        assert_eq!(snapshot.requested_config_revision, 9);
+        assert_eq!(snapshot.applied_config_revision, 8);
+        assert_eq!(
+            snapshot.last_source_size,
+            Some(PhysicalSize::new(2048, 1536))
+        );
+        assert_eq!(
+            snapshot.last_expected_source_size,
+            Some(PhysicalSize::new(2048, 1500))
+        );
     }
 }
