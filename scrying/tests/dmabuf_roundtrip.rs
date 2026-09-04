@@ -212,10 +212,11 @@ fn dmabuf_import_round_trip() {
     };
 
     let frame = unsafe {
-        DmaBufImage::from_raw_owned_parts(
+        DmaBufImage::from_owned_raw_buffers(
             PhysicalSize::new(WIDTH, HEIGHT), WGPU_FORMAT, DRM_FORMAT_ARGB8888,
             fixture.drm_modifier,
-            vec![DmaBufPlane { fd: fixture.dmabuf_fd, offset: fixture.offset, stride: fixture.stride }],
+            vec![fixture.dmabuf_fd],
+            vec![DmaBufPlane::new(0, fixture.offset, fixture.stride)],
             1, SyncMechanism::None, None,
         )
     }.expect("producer fd is owned by the frame");
@@ -278,10 +279,11 @@ fn dmabuf_import_with_signaled_semaphore() {
     eprintln!("exported producer semaphore fd={semaphore_fd}");
 
     let frame = unsafe {
-        DmaBufImage::from_raw_owned_parts(
+        DmaBufImage::from_owned_raw_buffers(
             PhysicalSize::new(WIDTH, HEIGHT), WGPU_FORMAT, DRM_FORMAT_ARGB8888,
             fixture.drm_modifier,
-            vec![DmaBufPlane { fd: fixture.dmabuf_fd, offset: fixture.offset, stride: fixture.stride }],
+            vec![fixture.dmabuf_fd],
+            vec![DmaBufPlane::new(0, fixture.offset, fixture.stride)],
             2, SyncMechanism::ExplicitExternalSemaphore, Some(semaphore_fd),
         )
     }.expect("producer descriptors are owned by the frame");
@@ -319,10 +321,11 @@ fn dmabuf_import_implicit_modifier() {
     };
 
     let frame = unsafe {
-        DmaBufImage::from_raw_owned_parts(
+        DmaBufImage::from_owned_raw_buffers(
             PhysicalSize::new(WIDTH, HEIGHT), WGPU_FORMAT, DRM_FORMAT_ARGB8888,
             DRM_FORMAT_MOD_INVALID,
-            vec![DmaBufPlane { fd: fixture.dmabuf_fd, offset: fixture.offset, stride: fixture.stride }],
+            vec![fixture.dmabuf_fd],
+            vec![DmaBufPlane::new(0, fixture.offset, fixture.stride)],
             3, SyncMechanism::None, None,
         )
     }.expect("producer fd is owned by the frame");

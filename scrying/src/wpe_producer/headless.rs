@@ -26,7 +26,7 @@
 //! WebKit state is independent of this one).
 
 use std::collections::HashMap;
-use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
+use std::os::fd::{FromRawFd, OwnedFd};
 
 use super::ffi;
 use crate::{UrlSchemeHandlerFn, WebSurfaceError};
@@ -233,49 +233,47 @@ unsafe fn dmabuf_to_image(
         return None;
     }
     let source_planes = (0..n_planes)
-        .map(|i| DmaBufPlane {
-            fd: unsafe { ffi::wpe_buffer_dma_buf_get_fd(dmabuf, i) },
-            offset: unsafe { ffi::wpe_buffer_dma_buf_get_offset(dmabuf, i) },
-            stride: unsafe { ffi::wpe_buffer_dma_buf_get_stride(dmabuf, i) },
+        .map(|i| {
+            (
+                unsafe { ffi::wpe_buffer_dma_buf_get_fd(dmabuf, i) },
+                unsafe { ffi::wpe_buffer_dma_buf_get_offset(dmabuf, i) },
+                unsafe { ffi::wpe_buffer_dma_buf_get_stride(dmabuf, i) },
+            )
         })
         .collect::<Vec<_>>();
     // `OwnedFd` keeps every successful duplication owned while the whole
     // multi-plane handoff is assembled. A later dup failure therefore closes
     // the earlier descriptors instead of leaking them out of this callback.
-    let planes = duplicate_plane_fds(source_planes, |fd| unsafe { libc::dup(fd) })?;
-    // SAFETY: each plane fd is a successful dup owned exclusively by this
-    // frame constructor. `DmaBufImage` closes them on every later path.
-    unsafe {
-        DmaBufImage::from_raw_owned_parts(
-            dpi::PhysicalSize::new(width as u32, height as u32),
-            // WPE's default headless buffer is BGRA; corrected against the observed
-            // fourcc in Task 6 if the runtime smoke shows otherwise.
-            wgpu::TextureFormat::Bgra8UnormSrgb,
-            ffi::wpe_buffer_dma_buf_get_format(dmabuf),
-            ffi::wpe_buffer_dma_buf_get_modifier(dmabuf),
-            planes,
-            0, // assigned on submit
-            SyncMechanism::None,
-            None,
-        )
-    }
+    let (buffers, planes) = duplicate_plane_fds(source_planes, |fd| unsafe { libc::dup(fd) })?;
+    DmaBufImage::from_owned_buffers(
+        dpi::PhysicalSize::new(width as u32, height as u32),
+        // WPE's default headless buffer is BGRA; corrected against the observed
+        // fourcc in Task 6 if the runtime smoke shows otherwise.
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        unsafe { ffi::wpe_buffer_dma_buf_get_format(dmabuf) },
+        unsafe { ffi::wpe_buffer_dma_buf_get_modifier(dmabuf) },
+        buffers,
+        planes,
+        0, // assigned on submit
+        SyncMechanism::None,
+        None,
+    )
     .ok()
 }
 
 /// Duplicate a set of borrowed DMABUF plane descriptors into a new owned
-/// descriptor set. The returned raw descriptors transfer ownership to
-/// [`DmaBufImage::from_raw_owned_parts`].
+/// descriptor table and index-only plane metadata.
 ///
 /// Keeping the intermediate descriptors in [`OwnedFd`] is important: this
 /// helper has one fallible operation per plane, and any earlier successful
 /// duplicate must close if a later operation fails.
 fn duplicate_plane_fds(
-    source_planes: impl IntoIterator<Item = DmaBufPlane>,
+    source_planes: impl IntoIterator<Item = (i32, u32, u32)>,
     mut duplicate: impl FnMut(i32) -> i32,
-) -> Option<Vec<DmaBufPlane>> {
+) -> Option<(Vec<OwnedFd>, Vec<DmaBufPlane>)> {
     let mut owned_planes = Vec::new();
-    for plane in source_planes {
-        let fd = duplicate(plane.fd);
+    for (source_fd, offset, stride) in source_planes {
+        let fd = duplicate(source_fd);
         if fd < 0 {
             return None;
         }
@@ -283,18 +281,15 @@ fn duplicate_plane_fds(
         // descriptor. It remains owned by this local until we intentionally
         // transfer it below.
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-        owned_planes.push((fd, plane.offset, plane.stride));
+        owned_planes.push((fd, offset, stride));
     }
-    Some(
-        owned_planes
-            .into_iter()
-            .map(|(fd, offset, stride)| DmaBufPlane {
-                fd: fd.into_raw_fd(),
-                offset,
-                stride,
-            })
-            .collect(),
-    )
+    let planes = owned_planes
+        .iter()
+        .enumerate()
+        .map(|(buffer_index, (_, offset, stride))| DmaBufPlane::new(buffer_index, *offset, *stride))
+        .collect();
+    let buffers = owned_planes.into_iter().map(|(fd, _, _)| fd).collect();
+    Some((buffers, planes))
 }
 
 /// Connect the `WPEView::buffer-rendered` frame seam.
@@ -347,8 +342,11 @@ pub(super) fn connect_buffer_rendered(
             unsafe { ffi::wpe_view_buffer_released(view, raw_buf) };
 
             if let Some(mut image) = image {
-                image.generation =
-                    sink.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                image.set_generation(
+                    sink.generation
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        + 1,
+                );
                 sink.submit(image);
             }
         }),
@@ -359,8 +357,6 @@ pub(super) fn connect_buffer_rendered(
 mod tests {
     use std::cell::Cell;
 
-    use crate::native_frame::DmaBufPlane;
-
     #[test]
     fn partial_duplicate_failure_closes_earlier_descriptors() {
         let mut source = [0; 2];
@@ -369,16 +365,8 @@ mod tests {
         let calls = Cell::new(0);
         let result = super::duplicate_plane_fds(
             vec![
-                DmaBufPlane {
-                    fd: source[0],
-                    offset: 0,
-                    stride: 16,
-                },
-                DmaBufPlane {
-                    fd: source[0],
-                    offset: 16,
-                    stride: 16,
-                },
+                (source[0], 0, 16),
+                (source[0], 16, 16),
             ],
             |fd| {
                 let call = calls.get();
@@ -460,12 +448,12 @@ mod tests {
             panic!("expected a DMABUF frame");
         };
         assert!(img1.size.width > 0 && img1.size.height > 0, "non-zero size 1");
-        assert!(!img1.planes.is_empty(), "at least one plane");
-        assert!(img1.planes[0].fd >= 0, "valid dup'd fd");
+        assert!(!img1.planes().is_empty(), "at least one plane");
+        assert!(img1.buffer_count() > 0, "owned descriptor buffer present");
         assert_eq!(img1.producer_sync, SyncMechanism::None);
         eprintln!(
             "smoke#1 (post-nav): {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
-            img1.size.width, img1.size.height, img1.drm_format, img1.drm_modifier, img1.planes.len()
+            img1.size.width, img1.size.height, img1.drm_format, img1.drm_modifier, img1.planes().len()
         );
 
         // --- 2. Resize + assert next frame ---
@@ -501,7 +489,7 @@ mod tests {
         assert!(img2.size.width > 0 && img2.size.height > 0, "non-zero size 2");
         eprintln!(
             "smoke#2 (post-resize): {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
-            img2.size.width, img2.size.height, img2.drm_format, img2.drm_modifier, img2.planes.len()
+            img2.size.width, img2.size.height, img2.drm_format, img2.drm_modifier, img2.planes().len()
         );
         // Soft assertion: the headless toplevel may coerce dimensions. The
         // diagnostic eprintln makes the actual size visible. Hard contract:

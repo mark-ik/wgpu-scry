@@ -251,17 +251,17 @@ impl WpeProducer {
                 "WPE DMABUF frame size must be non-zero".to_string(),
             ));
         }
-        if frame.planes.is_empty() {
+        if frame.planes().is_empty() {
             return Err(WebSurfaceError::Platform(
                 "WPE DMABUF frame did not include any planes".to_string(),
             ));
         }
-        frame.generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        frame.producer_sync = if frame.semaphore_fd.is_some() {
+        frame.set_generation(self.generation.fetch_add(1, Ordering::Relaxed) + 1);
+        frame.set_producer_sync(if frame.semaphore_fd().is_some() {
             SyncMechanism::ExplicitExternalSemaphore
         } else {
             SyncMechanism::None
-        };
+        });
         // Route through the shared sink; stale frames are dropped and close
         // their descriptors through DmaBufImage's ownership.
         self.frame_sink().submit(frame);
@@ -712,6 +712,7 @@ impl WebSurfaceProducer for WpeProducer {
 mod fd_tests {
     use super::*;
     use crate::native_frame::{DmaBufImage, DmaBufPlane, SyncMechanism};
+    use std::os::fd::{FromRawFd, OwnedFd};
 
     // Serialize all fd tests so parallel test threads don't recycle fd
     // numbers between the close-under-test and the fd_open assertion.
@@ -739,23 +740,19 @@ mod fd_tests {
     }
 
     fn frame_with_fd(fd: i32) -> DmaBufImage {
-        unsafe {
-            DmaBufImage::from_raw_owned_parts(
-                dpi::PhysicalSize::new(4, 4),
-                wgpu::TextureFormat::Bgra8UnormSrgb,
-                0,
-                0,
-                vec![DmaBufPlane {
-                    fd,
-                    offset: 0,
-                    stride: 16,
-                }],
-                0,
-                SyncMechanism::None,
-                None,
-            )
-            .expect("test fd must be owned")
-        }
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        DmaBufImage::from_owned_buffers(
+            dpi::PhysicalSize::new(4, 4),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            0,
+            0,
+            vec![fd],
+            vec![DmaBufPlane::new(0, 0, 16)],
+            0,
+            SyncMechanism::None,
+            None,
+        )
+        .expect("test fd must be owned")
     }
 
     #[test]

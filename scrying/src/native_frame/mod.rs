@@ -321,19 +321,37 @@ impl MetalTextureRef {
     }
 }
 
-/// One plane of a Linux DMABUF image.
+/// Copyable metadata for one plane of a Linux DMABUF image.
 ///
-/// The descriptor number is a metadata view. Ownership is held by the
-/// containing [`DmaBufImage`] and is transferred with that frame. The eventual
-/// Vulkan importer must duplicate or consume the fd, then close it after
-/// `vkImportMemoryFdKHR` / image creation has taken ownership as required by
-/// the Vulkan external-memory contract.
-#[derive(Clone, Copy, Debug)]
+/// `buffer_index` selects an owned descriptor in the containing
+/// [`DmaBufImage`]. A standalone plane never owns a descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DmaBufPlane {
-    /// Raw descriptor number view. The field is not independently owned.
-    pub fd: i32,
-    pub offset: u32,
-    pub stride: u32,
+    buffer_index: usize,
+    offset: u32,
+    stride: u32,
+}
+
+impl DmaBufPlane {
+    pub fn new(buffer_index: usize, offset: u32, stride: u32) -> Self {
+        Self {
+            buffer_index,
+            offset,
+            stride,
+        }
+    }
+
+    pub fn buffer_index(&self) -> usize {
+        self.buffer_index
+    }
+
+    pub fn offset(&self) -> u32 {
+        self.offset
+    }
+
+    pub fn stride(&self) -> u32 {
+        self.stride
+    }
 }
 
 /// A Linux WPE frame exported as DMABUF planes.
@@ -343,69 +361,49 @@ pub struct DmaBufImage {
     pub format: wgpu::TextureFormat,
     pub drm_format: u32,
     pub drm_modifier: u64,
-    pub planes: Vec<DmaBufPlane>,
+    planes: Vec<DmaBufPlane>,
     pub generation: u64,
     pub producer_sync: SyncMechanism,
-    /// Optional opaque fd for a Vulkan external semaphore signalled by the
-    /// producer when the frame is ready. The descriptor is owned by this
-    /// frame and is closed when the frame is dropped.
-    pub semaphore_fd: Option<i32>,
     #[cfg(target_os = "linux")]
-    plane_fds: Vec<std::os::fd::OwnedFd>,
+    buffers: Vec<std::os::fd::OwnedFd>,
     #[cfg(target_os = "linux")]
-    semaphore_owner: Option<std::os::fd::OwnedFd>,
+    semaphore: Option<std::os::fd::OwnedFd>,
 }
 
 #[cfg(target_os = "linux")]
 impl DmaBufImage {
-    /// Build a frame from uniquely owned raw plane descriptors. Repeated
-    /// references to one raw fd are represented by one owner; distinct dup'd
-    /// fds remain distinct owners. Valid descriptors are closed before an
-    /// input-validation error is returned.
-    pub unsafe fn from_raw_owned_parts(
+    /// Build a frame from an owned descriptor table and copyable plane
+    /// metadata. Every supplied descriptor is closed if validation fails.
+    pub fn from_owned_buffers(
         size: PhysicalSize<u32>,
         format: wgpu::TextureFormat,
         drm_format: u32,
         drm_modifier: u64,
+        buffers: Vec<std::os::fd::OwnedFd>,
         planes: Vec<DmaBufPlane>,
         generation: u64,
         producer_sync: SyncMechanism,
-        semaphore_fd: Option<i32>,
+        semaphore: Option<std::os::fd::OwnedFd>,
     ) -> Result<Self, InteropError> {
-        use std::os::fd::{FromRawFd, OwnedFd};
-
-        let mut owned_raw = Vec::new();
-        for plane in &planes {
-            if plane.fd < 0 {
-                Self::close_raw_descriptors(&planes, semaphore_fd);
-                return Err(InteropError::InvalidFrame(
-                    "DMABUF plane descriptor must be non-negative",
-                ));
-            }
-            if !owned_raw.contains(&plane.fd) {
-                owned_raw.push(plane.fd);
-            }
+        if size.width == 0 || size.height == 0 {
+            return Err(InteropError::InvalidFrame("DMABUF image has zero size"));
         }
-        if let Some(fd) = semaphore_fd {
-            if fd < 0 {
-                Self::close_raw_descriptors(&planes, semaphore_fd);
-                return Err(InteropError::InvalidFrame(
-                    "semaphore descriptor must be non-negative",
-                ));
-            }
-            if owned_raw.contains(&fd) {
-                Self::close_raw_descriptors(&planes, semaphore_fd);
-                return Err(InteropError::InvalidFrame(
-                    "semaphore descriptor aliases a DMABUF plane descriptor",
-                ));
-            }
+        if planes.is_empty() {
+            return Err(InteropError::InvalidFrame("DMABUF image has no planes"));
         }
-        let plane_fds = owned_raw
-            .into_iter()
-            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
-            .collect();
-        let semaphore_owner = semaphore_fd
-            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) });
+        if buffers.is_empty() {
+            return Err(InteropError::InvalidFrame(
+                "DMABUF image has no descriptor buffers",
+            ));
+        }
+        if planes
+            .iter()
+            .any(|plane| plane.buffer_index >= buffers.len())
+        {
+            return Err(InteropError::InvalidFrame(
+                "DMABUF plane buffer index is out of range",
+            ));
+        }
         Ok(Self {
             size,
             format,
@@ -414,26 +412,98 @@ impl DmaBufImage {
             planes,
             generation,
             producer_sync,
-            semaphore_fd,
-            plane_fds,
-            semaphore_owner,
+            buffers,
+            semaphore,
         })
     }
 
-    fn close_raw_descriptors(planes: &[DmaBufPlane], semaphore_fd: Option<i32>) {
-        let mut descriptors = planes
-            .iter()
-            .map(|plane| plane.fd)
-            .chain(semaphore_fd)
-            .filter(|fd| *fd >= 0)
-            .collect::<Vec<_>>();
-        descriptors.sort_unstable();
-        descriptors.dedup();
-        for fd in descriptors {
-            // SAFETY: the unsafe constructor takes ownership of each valid
-            // descriptor before reporting validation failure.
-            unsafe { libc::close(fd) };
+    /// Build a frame by transferring owned raw descriptors.
+    ///
+    /// # Safety
+    ///
+    /// Every non-negative descriptor must be uniquely owned by the caller.
+    /// This function takes all descriptors immediately and closes every valid
+    /// one if validation fails. Repeating a numeric descriptor is invalid.
+    pub unsafe fn from_owned_raw_buffers(
+        size: PhysicalSize<u32>,
+        format: wgpu::TextureFormat,
+        drm_format: u32,
+        drm_modifier: u64,
+        raw_buffers: Vec<i32>,
+        planes: Vec<DmaBufPlane>,
+        generation: u64,
+        producer_sync: SyncMechanism,
+        semaphore_fd: Option<i32>,
+    ) -> Result<Self, InteropError> {
+        use std::os::fd::FromRawFd;
+
+        let mut custody = RawFdCustody::new(&raw_buffers, semaphore_fd);
+        if raw_buffers.iter().any(|fd| *fd < 0) || semaphore_fd.is_some_and(|fd| fd < 0) {
+            return Err(InteropError::InvalidFrame(
+                "owned raw descriptors must be non-negative",
+            ));
         }
+        let mut unique = raw_buffers.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        if unique.len() != raw_buffers.len() || semaphore_fd.is_some_and(|fd| unique.contains(&fd))
+        {
+            return Err(InteropError::InvalidFrame(
+                "owned raw descriptors must not alias",
+            ));
+        }
+        let buffers = raw_buffers
+            .into_iter()
+            .map(|fd| {
+                custody.disarm(fd);
+                unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }
+            })
+            .collect();
+        let semaphore = semaphore_fd.map(|fd| {
+            custody.disarm(fd);
+            unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }
+        });
+        Self::from_owned_buffers(
+            size,
+            format,
+            drm_format,
+            drm_modifier,
+            buffers,
+            planes,
+            generation,
+            producer_sync,
+            semaphore,
+        )
+    }
+
+    pub fn planes(&self) -> &[DmaBufPlane] {
+        &self.planes
+    }
+
+    pub fn buffer_count(&self) -> usize {
+        self.buffers.len()
+    }
+
+    /// Borrow one descriptor from the owned buffer table. The returned
+    /// descriptor cannot outlive the frame and must not be closed by callers.
+    pub fn buffer_fd(&self, buffer_index: usize) -> Option<std::os::fd::BorrowedFd<'_>> {
+        use std::os::fd::AsFd;
+        self.buffers.get(buffer_index).map(|fd| fd.as_fd())
+    }
+
+    /// Borrow the semaphore descriptor for diagnostics. The frame retains
+    /// ownership and callers must not close it.
+    pub fn semaphore_fd(&self) -> Option<i32> {
+        use std::os::fd::AsRawFd;
+        self.semaphore.as_ref().map(|fd| fd.as_raw_fd())
+    }
+
+    pub(crate) fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
+    pub(crate) fn set_producer_sync(&mut self, producer_sync: SyncMechanism) {
+        self.producer_sync = producer_sync;
     }
 
     pub(crate) fn into_graft_import(
@@ -446,34 +516,20 @@ impl DmaBufImage {
         ),
         InteropError,
     > {
-        use std::os::fd::AsRawFd;
-
         let Self {
             size,
             format,
             drm_format,
             drm_modifier: _original_drm_modifier,
             planes,
-            semaphore_owner,
-            plane_fds,
+            semaphore,
+            buffers,
             ..
         } = self;
-        let plane_indices = planes
-            .iter()
-            .map(|plane| {
-                plane_fds
-                    .iter()
-                    .position(|owned| owned.as_raw_fd() == plane.fd)
-                    .ok_or(InteropError::InvalidFrame(
-                        "DMABUF plane descriptor is not owned by its frame",
-                    ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         let graft_planes = planes
             .iter()
-            .zip(plane_indices)
-            .map(|(plane, buffer_index)| grafting::vulkan_dmabuf::VulkanDmaBufPlane {
-                buffer_index,
+            .map(|plane| grafting::vulkan_dmabuf::VulkanDmaBufPlane {
+                buffer_index: plane.buffer_index,
                 offset: u64::from(plane.offset),
                 stride: u64::from(plane.stride),
             })
@@ -483,12 +539,51 @@ impl DmaBufImage {
             format,
             drm_format,
             drm_modifier,
-            plane_fds,
+            buffers,
             graft_planes,
             grafting::vulkan_dmabuf::VulkanDmaBufQueueOwnership::Foreign,
         )
         .map_err(|error| InteropError::Vulkan(error.to_string()))?;
-        Ok((frame, semaphore_owner))
+        Ok((frame, semaphore))
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct RawFdCustody {
+    raw_fds: Vec<i32>,
+}
+
+#[cfg(target_os = "linux")]
+impl RawFdCustody {
+    fn new(raw_buffers: &[i32], semaphore_fd: Option<i32>) -> Self {
+        let mut raw_fds = raw_buffers
+            .iter()
+            .copied()
+            .chain(semaphore_fd)
+            .filter(|fd| *fd >= 0)
+            .collect::<Vec<_>>();
+        raw_fds.sort_unstable();
+        raw_fds.dedup();
+        Self { raw_fds }
+    }
+
+    fn disarm(&mut self, raw_fd: i32) {
+        if let Some(index) = self
+            .raw_fds
+            .iter()
+            .position(|candidate| *candidate == raw_fd)
+        {
+            self.raw_fds.swap_remove(index);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for RawFdCustody {
+    fn drop(&mut self) {
+        for raw_fd in &self.raw_fds {
+            unsafe { libc::close(*raw_fd) };
+        }
     }
 }
 
@@ -630,7 +725,15 @@ fn import_dx12_shared_texture(
             size: frame.size,
             format: frame.format,
             generation: frame.generation,
-            producer_sync: grafting::SyncMechanism::ImplicitGlFlush,
+            producer_sync: match frame.producer_sync {
+                SyncMechanism::ExplicitFence => grafting::SyncMechanism::ExplicitFence,
+                SyncMechanism::None => grafting::SyncMechanism::None,
+                // These mechanisms cannot occur on a DX12 frame, but retain
+                // their explicit nature if a custom producer supplies one.
+                SyncMechanism::ExplicitExternalSemaphore | SyncMechanism::ExplicitMetalEvent => {
+                    grafting::SyncMechanism::ExplicitExternalSemaphore
+                }
+            },
         };
         let g_host = grafting::HostWgpuContext::new(host.device.clone(), host.queue.clone());
         let g_frame = grafting::Dx12SharedTexture::new(
@@ -712,25 +815,28 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn dmabuf_frame_reports_kind_and_sync() {
-        let frame = NativeFrame::DmaBufImage(DmaBufImage {
-            size: PhysicalSize::new(16, 16),
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            drm_format: 0x34325241,
-            drm_modifier: 0,
-            planes: vec![DmaBufPlane {
-                fd: -1,
-                offset: 0,
-                stride: 64,
-            }],
-            generation: 1,
-            producer_sync: SyncMechanism::ExplicitExternalSemaphore,
-            semaphore_fd: Some(-1),
-            #[cfg(target_os = "linux")]
-            plane_fds: Vec::new(),
-            #[cfg(target_os = "linux")]
-            semaphore_owner: None,
-        });
+        use std::os::fd::FromRawFd;
+
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        unsafe { libc::close(fds[1]) };
+        let buffer = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[0]) };
+        let frame = NativeFrame::DmaBufImage(
+            DmaBufImage::from_owned_buffers(
+                PhysicalSize::new(16, 16),
+                wgpu::TextureFormat::Bgra8Unorm,
+                0x34325241,
+                0,
+                vec![buffer],
+                vec![DmaBufPlane::new(0, 0, 64)],
+                1,
+                SyncMechanism::ExplicitExternalSemaphore,
+                None,
+            )
+            .expect("valid owned DMABUF frame"),
+        );
 
         assert_eq!(frame.kind(), NativeFrameKind::DmaBufImage);
         assert_eq!(

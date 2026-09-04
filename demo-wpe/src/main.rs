@@ -182,21 +182,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 img.drm_modifier,
                 img.generation,
             );
-            println!("planes: {}", img.planes.len());
-            for (i, plane) in img.planes.iter().enumerate() {
+            println!("planes: {}", img.planes().len());
+            for (i, plane) in img.planes().iter().enumerate() {
                 println!(
-                    "  plane[{i}]: fd={} offset={} stride={}",
-                    plane.fd, plane.offset, plane.stride
+                    "  plane[{i}]: buffer={} offset={} stride={}",
+                    plane.buffer_index(),
+                    plane.offset(),
+                    plane.stride()
                 );
             }
-            if let Some(fd) = img.semaphore_fd {
+            if let Some(fd) = img.semaphore_fd() {
                 println!("producer semaphore fd: {fd}");
             }
             if args.snapshot_test {
                 if img.size.width == 0 || img.size.height == 0 {
                     return Err("FAIL: zero-sized DMABUF frame".into());
                 }
-                if img.planes.is_empty() {
+                if img.planes().is_empty() {
                     return Err("FAIL: DMABUF frame had no planes".into());
                 }
                 println!("PASS: DMABUF frame is non-empty");

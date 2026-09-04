@@ -36,7 +36,7 @@ pub(super) fn import(
     let format = frame.format;
     let generation = frame.generation;
     let producer_sync = frame.producer_sync;
-    let semaphore_fd = frame.semaphore_fd;
+    let semaphore_fd = frame.semaphore_fd();
 
     if host.backend != InteropBackend::Vulkan {
         return Err(InteropError::BackendMismatch {
@@ -44,7 +44,7 @@ pub(super) fn import(
             actual: "non-Vulkan",
         });
     }
-    if frame.planes.is_empty() {
+    if frame.planes().is_empty() {
         return Err(InteropError::InvalidFrame("DmaBufImage has no planes"));
     }
 
@@ -287,6 +287,7 @@ pub fn build_dmabuf_capable_device(
 mod ownership_tests {
     use super::*;
     use crate::native_frame::DmaBufPlane;
+    use std::os::fd::{FromRawFd, OwnedFd};
 
     fn pipe_fd() -> i32 {
         let mut fds = [0i32; 2];
@@ -299,40 +300,28 @@ mod ownership_tests {
         unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
     }
 
-    fn frame(planes: Vec<DmaBufPlane>) -> DmaBufImage {
-        unsafe {
-            DmaBufImage::from_raw_owned_parts(
-                dpi::PhysicalSize::new(4, 4),
-                wgpu::TextureFormat::Bgra8Unorm,
-                0,
-                0,
-                planes,
-                1,
-                SyncMechanism::None,
-                None,
-            )
-            .expect("test descriptors are uniquely owned")
-        }
+    fn owned(fd: i32) -> OwnedFd {
+        unsafe { OwnedFd::from_raw_fd(fd) }
     }
 
     #[test]
-    fn repeated_plane_fd_uses_one_owner_and_closes_on_drop() {
+    fn repeated_plane_index_uses_one_owner_and_closes_on_drop() {
         let fd = pipe_fd();
-        let image = frame(vec![
-            DmaBufPlane {
-                fd,
-                offset: 0,
-                stride: 16,
-            },
-            DmaBufPlane {
-                fd,
-                offset: 16,
-                stride: 16,
-            },
-        ]);
+        let image = DmaBufImage::from_owned_buffers(
+            dpi::PhysicalSize::new(4, 4),
+            wgpu::TextureFormat::Bgra8Unorm,
+            0,
+            0,
+            vec![owned(fd)],
+            vec![DmaBufPlane::new(0, 0, 16), DmaBufPlane::new(0, 16, 16)],
+            1,
+            SyncMechanism::None,
+            None,
+        )
+        .expect("shared buffer index");
         let (import, _) = image.into_graft_import(0).expect("shared plane table");
         drop(import);
-        assert!(!fd_open(fd), "repeated raw fd must close exactly once");
+        assert!(!fd_open(fd), "shared buffer fd must close exactly once");
     }
 
     #[test]
@@ -340,18 +329,18 @@ mod ownership_tests {
         let fd = pipe_fd();
         let dup_fd = unsafe { libc::dup(fd) };
         assert!(dup_fd >= 0);
-        let image = frame(vec![
-            DmaBufPlane {
-                fd,
-                offset: 0,
-                stride: 16,
-            },
-            DmaBufPlane {
-                fd: dup_fd,
-                offset: 16,
-                stride: 16,
-            },
-        ]);
+        let image = DmaBufImage::from_owned_buffers(
+            dpi::PhysicalSize::new(4, 4),
+            wgpu::TextureFormat::Bgra8Unorm,
+            0,
+            0,
+            vec![owned(fd), owned(dup_fd)],
+            vec![DmaBufPlane::new(0, 0, 16), DmaBufPlane::new(1, 16, 16)],
+            1,
+            SyncMechanism::None,
+            None,
+        )
+        .expect("distinct owned buffers");
         let (import, _) = image.into_graft_import(0).expect("distinct plane table");
         drop(import);
         assert!(!fd_open(fd), "first dup fd must close on drop");
@@ -361,23 +350,40 @@ mod ownership_tests {
     #[test]
     fn validation_failure_closes_valid_descriptors() {
         let fd = pipe_fd();
+        let result = DmaBufImage::from_owned_buffers(
+            dpi::PhysicalSize::new(4, 4),
+            wgpu::TextureFormat::Bgra8Unorm,
+            0,
+            0,
+            vec![owned(fd)],
+            vec![DmaBufPlane::new(1, 0, 16)],
+            1,
+            SyncMechanism::None,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(!fd_open(fd), "validation failure must close owned fds");
+    }
+
+    #[test]
+    fn raw_constructor_error_closes_all_valid_descriptors() {
+        let first = pipe_fd();
+        let second = pipe_fd();
         let result = unsafe {
-            DmaBufImage::from_raw_owned_parts(
+            DmaBufImage::from_owned_raw_buffers(
                 dpi::PhysicalSize::new(4, 4),
                 wgpu::TextureFormat::Bgra8Unorm,
                 0,
                 0,
-                vec![DmaBufPlane {
-                    fd,
-                    offset: 0,
-                    stride: 16,
-                }],
+                vec![first, -1, second],
+                vec![DmaBufPlane::new(0, 0, 16)],
                 1,
                 SyncMechanism::None,
-                Some(-1),
+                None,
             )
         };
         assert!(result.is_err());
-        assert!(!fd_open(fd), "validation failure must close owned fds");
+        assert!(!fd_open(first));
+        assert!(!fd_open(second));
     }
 }

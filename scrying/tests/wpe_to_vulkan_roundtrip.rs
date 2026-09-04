@@ -24,6 +24,7 @@
 #![cfg(all(target_os = "linux", feature = "wpe"))]
 
 use dpi::PhysicalSize;
+use std::os::fd::AsRawFd;
 use scrying::wgpu;
 use scrying::wpe_producer::{WpeProducer, WpeProducerConfig};
 use scrying::{
@@ -118,8 +119,8 @@ fn wpe_to_vulkan_round_trip() {
         image.size.width > 0 && image.size.height > 0,
         "non-zero size"
     );
-    assert!(!image.planes.is_empty(), "at least one plane");
-    assert!(image.planes[0].fd >= 0, "valid dup'd fd");
+    assert!(!image.planes().is_empty(), "at least one plane");
+    assert!(image.buffer_count() > 0, "owned descriptor buffer present");
     assert_eq!(image.producer_sync, SyncMechanism::None);
     eprintln!(
         "wpe→vk: {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
@@ -127,7 +128,7 @@ fn wpe_to_vulkan_round_trip() {
         image.size.height,
         image.drm_format,
         image.drm_modifier,
-        image.planes.len()
+        image.planes().len()
     );
 
     // --- 3b. Plane-fd diagnostic for the (α) multi-plane import design. ---
@@ -138,24 +139,32 @@ fn wpe_to_vulkan_round_trip() {
     // aux DCC metadata, distinguished by per-plane offsets). Different
     // inodes would mean genuinely separate DMABUFs requiring distinct
     // VkDeviceMemory imports.
-    for (i, plane) in image.planes.iter().enumerate() {
+    for (i, plane) in image.planes().iter().enumerate() {
+        let fd = image
+            .buffer_fd(plane.buffer_index())
+            .expect("plane buffer index was validated")
+            .as_raw_fd();
         let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // SAFETY: plane.fd is a valid producer-owned fd; fstat is read-only.
-        let rc = unsafe { libc::fstat(plane.fd, st.as_mut_ptr()) };
+        // SAFETY: `fd` is borrowed from the producer-owned frame; fstat is read-only.
+        let rc = unsafe { libc::fstat(fd, st.as_mut_ptr()) };
         if rc == 0 {
             let st = unsafe { st.assume_init() };
             eprintln!(
                 "wpe→vk:   plane[{}]: fd={} st_ino={} offset={} stride={}",
-                i, plane.fd, st.st_ino, plane.offset, plane.stride
+                i,
+                fd,
+                st.st_ino,
+                plane.offset(),
+                plane.stride()
             );
         } else {
             eprintln!(
                 "wpe→vk:   plane[{}]: fd={} fstat failed errno={} offset={} stride={}",
                 i,
-                plane.fd,
+                fd,
                 std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
-                plane.offset,
-                plane.stride
+                plane.offset(),
+                plane.stride()
             );
         }
     }
