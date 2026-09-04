@@ -31,10 +31,6 @@ pub(super) struct WpeHandles {
     /// Raw WPEView pointer borrowed from the webview; valid for the webview's
     /// lifetime (i.e. for the lifetime of this struct).
     pub view: *mut super::ffi::WPEView,
-    /// Borrowed from the view (transfer-none); valid for the view's lifetime.
-    /// `resize` calls `wpe_toplevel_resize` against this. NOT unref'd in Drop
-    /// — the view (held alive transitively via webview) owns it.
-    pub toplevel: *mut super::ffi::WPEToplevel,
     /// GLib main context the producer is affine to; pumped by
     /// acquire/navigate calls.
     pub main_context: glib::MainContext,
@@ -137,7 +133,7 @@ impl WpeProducer {
             )));
         }
         let main_context = glib::MainContext::default();
-        let (webview, view, toplevel) = super::headless::build_producer_view(url_schemes)?;
+        let (webview, view) = super::headless::build_producer_view(url_schemes)?;
         let nav_state = std::rc::Rc::new(std::cell::RefCell::new(
             super::navigation::NavState::default(),
         ));
@@ -195,7 +191,6 @@ impl WpeProducer {
             handles: WpeHandles {
                 webview,
                 view,
-                toplevel,
                 main_context,
             },
             nav_state,

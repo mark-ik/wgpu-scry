@@ -82,7 +82,7 @@ pub(super) fn pump_until(
 /// which happens when the producer drops).
 pub(super) fn build_producer_view(
     url_schemes: HashMap<String, UrlSchemeHandlerFn>,
-) -> Result<(glib::Object, *mut ffi::WPEView, *mut ffi::WPEToplevel), WebSurfaceError> {
+) -> Result<(glib::Object, *mut ffi::WPEView), WebSurfaceError> {
     // 1. Self-owned headless display (no compositor surface).
     let display = unsafe { ffi::wpe_display_headless_new() };
     if display.is_null() {
@@ -197,19 +197,7 @@ pub(super) fn build_producer_view(
         ));
     }
 
-    // 10. Acquire the view's toplevel (resize target). `wpe_view_get_toplevel`
-    //     is transfer-none — the view owns it, no unref on our side.
-    // SAFETY: `view` is non-null per step 9.
-    let toplevel = unsafe { ffi::wpe_view_get_toplevel(view) };
-    if toplevel.is_null() {
-        return Err(WebSurfaceError::Platform(
-            "wpe_view_get_toplevel returned null on the headless display; \
-             resize would always fail"
-                .into(),
-        ));
-    }
-
-    Ok((webview, view, toplevel))
+    Ok((webview, view))
 }
 
 /// Convert a rendered `WPEBufferDMABuf` into a producer-owned [`DmaBufImage`] by

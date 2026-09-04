@@ -50,10 +50,6 @@ pub struct JSCValue {
     _opaque: [u8; 0],
 }
 #[repr(C)]
-pub struct WPEToplevel {
-    _opaque: [u8; 0],
-}
-#[repr(C)]
 pub struct WPEEvent {
     _opaque: [u8; 0],
 }
@@ -123,10 +119,8 @@ pub struct GInputStream {
 /// main context. `user_data` is the `Box::into_raw`d trampoline payload;
 /// the registration's `GDestroyNotify` releases it when the WebContext
 /// is finalized.
-pub type WebKitURISchemeRequestCallback = unsafe extern "C" fn(
-    request: *mut WebKitURISchemeRequest,
-    user_data: *mut std::ffi::c_void,
-);
+pub type WebKitURISchemeRequestCallback =
+    unsafe extern "C" fn(request: *mut WebKitURISchemeRequest, user_data: *mut std::ffi::c_void);
 
 /// Matches the C `GDestroyNotify` typedef. Called once when the
 /// WebContext is finalized (i.e. when the producer drops); reclaims the
@@ -200,19 +194,6 @@ unsafe extern "C" {
     // WPEView frame lifecycle — release a buffer back to the producer once
     // scrying has finished importing it (used in later tasks).
     pub fn wpe_view_buffer_released(view: *mut WPEView, buffer: *mut WPEBuffer);
-
-    // View-side size notification — emits the view's `resized` signal and
-    // updates `wpe_view_get_width/height`. On the headless display this is
-    // what actually drives the rendered buffer dimensions: the toplevel's
-    // `resize` vfunc is a no-op there, so `wpe_toplevel_resize` returning
-    // TRUE doesn't propagate to the WebView's render target. Calling this
-    // explicitly after the toplevel resize tells WebKit the new size.
-    pub fn wpe_view_resized(view: *mut WPEView, width: c_int, height: c_int);
-
-    // Toplevel chain — under WPEPlatform the view's render size is set on
-    // its WPEToplevel, not on the view directly.
-    pub fn wpe_view_get_toplevel(view: *mut WPEView) -> *mut WPEToplevel;
-    pub fn wpe_toplevel_resize(t: *mut WPEToplevel, width: c_int, height: c_int) -> c_int; // gboolean
 
     // Generic WPEBuffer geometry.
     pub fn wpe_buffer_get_width(buffer: *mut WPEBuffer) -> c_int;
@@ -351,9 +332,7 @@ unsafe extern "C" {
     // verified against
     // /usr/include/wpe-webkit-2.0/wpe/WebKitHitTestResult.h:
     //   guint webkit_hit_test_result_get_context (WebKitHitTestResult *);
-    pub fn webkit_hit_test_result_get_context(
-        hit_test_result: *mut WebKitHitTestResult,
-    ) -> u32;
+    pub fn webkit_hit_test_result_get_context(hit_test_result: *mut WebKitHitTestResult) -> u32;
 
     // --- Cookie store (4c.5.b) ---
     // Both getters are transfer-none — the WebView owns its network
@@ -427,9 +406,8 @@ unsafe extern "C" {
 
     // URI scheme request introspection + completion. `get_uri` is
     // transfer-none — the request owns the string.
-    pub fn webkit_uri_scheme_request_get_uri(
-        request: *mut WebKitURISchemeRequest,
-    ) -> *const c_char;
+    pub fn webkit_uri_scheme_request_get_uri(request: *mut WebKitURISchemeRequest)
+    -> *const c_char;
     pub fn webkit_uri_scheme_request_finish_with_response(
         request: *mut WebKitURISchemeRequest,
         response: *mut WebKitURISchemeResponse,
@@ -457,9 +435,8 @@ unsafe extern "C" {
     // takes its own ref, so we release ours after handing it over.
     // Lives in libgio-2.0.so; libwpe-webkit-2.0 already depends on it
     // transitively, so the symbol is reachable at link time.
-    pub fn g_memory_input_stream_new_from_bytes(
-        bytes: *mut glib::ffi::GBytes,
-    ) -> *mut GInputStream;
+    pub fn g_memory_input_stream_new_from_bytes(bytes: *mut glib::ffi::GBytes)
+    -> *mut GInputStream;
 
     // --- Download lifecycle (4c.5.f) ---
     // Programmatic download kickoff. Signature verified against
