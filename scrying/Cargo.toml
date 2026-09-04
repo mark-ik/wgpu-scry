@@ -1,7 +1,8 @@
 [package]
 name = "scrying"
-version = "0.8.0"
+version = "0.7.0"
 edition = "2024"
+rust-version = "1.92"
 license = "MPL-2.0"
 repository = "https://github.com/merely-made/wgpu-scry"
 description = "Capability-driven system-webview frame adapter for WebView2, WKWebView, WebKitGTK, and WPE"
@@ -54,7 +55,7 @@ image = "0.25"
 # in the gamut conversions; no rendering-extras features.
 palette = { version = "0.7", default-features = false, features = ["std"] }
 thiserror = "2.0.17"
-grafting = { version = "0.6.0", git = "https://github.com/merely-made/wgpu-graft.git", rev = "a9c6ee856f784361b9e6134adb694461b3aadf3c", default-features = false }
+grafting = { version = "0.6.0", git = "https://github.com/merely-made/wgpu-graft.git", rev = "d671c9681332751f8ea24dd974511b81fe6a05dd", default-features = false }
 wgpu_30 = { package = "wgpu", version = "30.0.1", features = ["metal"], optional = true }
 wgpu_hal_30 = { package = "wgpu-hal", version = "30.0.1", optional = true }
 wgpu_29 = { package = "wgpu", version = "29.0.1", features = ["metal"], optional = true }
