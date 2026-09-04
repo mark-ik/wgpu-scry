@@ -10,9 +10,35 @@ use std::sync::{Arc, Mutex};
 use dpi::PhysicalSize;
 
 use crate::native_frame::{DmaBufImage, NativeFrame, SyncMechanism};
-use crate::{WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame, WebSurfaceProducer};
+use crate::{
+    WebRequestId, WebSurfaceCapabilities, WebSurfaceError, WebSurfaceEvent, WebSurfaceFrame,
+    WebSurfaceProducer,
+};
 
 use super::WpeProducerConfig;
+
+/// The one authoritative event stream for a WPE web surface. Native WPE
+/// callbacks all run on the producer's affine GLib context, so this local
+/// queue preserves their callback order without a cross-thread channel.
+#[cfg(feature = "wpe")]
+pub(super) type WebSurfaceEventQueue =
+    std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<WebSurfaceEvent>>>;
+
+#[cfg(feature = "wpe")]
+fn pop_legacy_web_message(
+    legacy: &std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<String>>>,
+    ordered: &WebSurfaceEventQueue,
+) -> Option<String> {
+    let message = legacy.borrow_mut().pop_front()?;
+    let mut ordered = ordered.borrow_mut();
+    if let Some(index) = ordered
+        .iter()
+        .position(|event| matches!(event, WebSurfaceEvent::WebMessage(_)))
+    {
+        ordered.remove(index);
+    }
+    Some(message)
+}
 
 /// Owned GObject handles for the WPE headless producer.
 ///
@@ -53,6 +79,10 @@ pub struct WpeProducer {
     pub(super) handles: WpeHandles,
     #[cfg(feature = "wpe")]
     pub(super) nav_state: std::rc::Rc<std::cell::RefCell<super::navigation::NavState>>,
+    /// Authoritative, callback-ordered stream. Navigation and page messages
+    /// are also copied into their legacy queues for existing callers.
+    #[cfg(feature = "wpe")]
+    pub(super) web_surface_events: WebSurfaceEventQueue,
     /// Incoming page→host messages drained by `poll_web_message` /
     /// `wait_for_web_message` (Task 4). Pushed from the
     /// `script-message-received::scry` signal closure installed in
@@ -137,10 +167,12 @@ impl WpeProducer {
         let nav_state = std::rc::Rc::new(std::cell::RefCell::new(
             super::navigation::NavState::default(),
         ));
-        super::navigation::install_load_signals(&webview, &nav_state);
+        let web_surface_events =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+        super::navigation::install_load_signals(&webview, &nav_state, web_surface_events.clone());
         let web_messages =
             std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
-        super::script_message::install(&webview, web_messages.clone());
+        super::script_message::install(&webview, web_messages.clone(), web_surface_events.clone());
         super::ime::install(&webview, nav_state.clone());
         let cursor_shape: std::rc::Rc<std::cell::RefCell<Option<crate::CursorShape>>> =
             std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -194,6 +226,7 @@ impl WpeProducer {
                 main_context,
             },
             nav_state,
+            web_surface_events,
             web_messages,
             cursor_shape,
             next_download_id,
@@ -361,7 +394,7 @@ impl WpeProducer {
         let ctx = &self.handles.main_context;
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            if let Some(m) = self.web_messages.borrow_mut().pop_front() {
+            if let Some(m) = pop_legacy_web_message(&self.web_messages, &self.web_surface_events) {
                 return Some(m);
             }
             if std::time::Instant::now() >= deadline {
@@ -511,11 +544,76 @@ impl WebSurfaceProducer for WpeProducer {
     fn poll_navigation_event(&mut self) -> Option<crate::NavigationEvent> {
         #[cfg(feature = "wpe")]
         {
-            self.nav_state.borrow_mut().events.pop_front()
+            let event = self.nav_state.borrow_mut().events.pop_front()?;
+            let mut ordered = self.web_surface_events.borrow_mut();
+            if let Some(index) = ordered
+                .iter()
+                .position(|event| matches!(event, WebSurfaceEvent::Navigation(_)))
+            {
+                ordered.remove(index);
+            }
+            Some(event)
         }
         #[cfg(not(feature = "wpe"))]
         {
             None
+        }
+    }
+
+    fn poll_web_surface_event(&mut self) -> Option<WebSurfaceEvent> {
+        #[cfg(feature = "wpe")]
+        {
+            let event = self.web_surface_events.borrow_mut().pop_front()?;
+            match &event {
+                WebSurfaceEvent::Navigation(_) => {
+                    self.nav_state.borrow_mut().events.pop_front();
+                }
+                WebSurfaceEvent::WebMessage(_) => {
+                    self.web_messages.borrow_mut().pop_front();
+                }
+                _ => {}
+            }
+            Some(event)
+        }
+        #[cfg(not(feature = "wpe"))]
+        {
+            None
+        }
+    }
+
+    fn request_script_result(
+        &mut self,
+        id: WebRequestId,
+        script: &str,
+    ) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")]
+        {
+            super::script_message::request_script_result(self, id, script)
+        }
+        #[cfg(not(feature = "wpe"))]
+        {
+            let _ = (id, script);
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
+        }
+    }
+
+    fn request_cookies_for_url(
+        &mut self,
+        id: WebRequestId,
+        url: &str,
+    ) -> Result<(), WebSurfaceError> {
+        #[cfg(feature = "wpe")]
+        {
+            WpeProducer::begin_request_cookies_for_url(self, id, url)
+        }
+        #[cfg(not(feature = "wpe"))]
+        {
+            let _ = (id, url);
+            Err(WebSurfaceError::Unsupported(
+                "WpeProducer compiled without `wpe` feature; rebuild with --features wpe",
+            ))
         }
     }
 
@@ -616,7 +714,7 @@ impl WebSurfaceProducer for WpeProducer {
                     std::ptr::null(),     // default world
                     std::ptr::null(),     // no source uri
                     std::ptr::null_mut(), // no cancellable
-                    std::ptr::null_mut(), // no completion callback
+                    None,                 // no completion callback
                     std::ptr::null_mut(),
                 );
             }
@@ -634,7 +732,7 @@ impl WebSurfaceProducer for WpeProducer {
     fn poll_web_message(&mut self) -> Option<String> {
         #[cfg(feature = "wpe")]
         {
-            self.web_messages.borrow_mut().pop_front()
+            pop_legacy_web_message(&self.web_messages, &self.web_surface_events)
         }
         #[cfg(not(feature = "wpe"))]
         {
@@ -651,6 +749,36 @@ impl WebSurfaceProducer for WpeProducer {
         {
             None
         }
+    }
+}
+
+#[cfg(all(test, feature = "wpe"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_message_pop_removes_its_ordered_mirror() {
+        let legacy = std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::from([
+            "page-message".to_owned(),
+        ])));
+        let ordered =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::from([
+                WebSurfaceEvent::Navigation(crate::NavigationEvent::Starting {
+                    url: "https://example.test/".to_owned(),
+                }),
+                WebSurfaceEvent::WebMessage("page-message".to_owned()),
+            ])));
+
+        assert_eq!(
+            pop_legacy_web_message(&legacy, &ordered).as_deref(),
+            Some("page-message")
+        );
+        assert!(legacy.borrow().is_empty());
+        assert!(matches!(
+            ordered.borrow().front(),
+            Some(WebSurfaceEvent::Navigation(_))
+        ));
+        assert_eq!(ordered.borrow().len(), 1);
     }
 }
 

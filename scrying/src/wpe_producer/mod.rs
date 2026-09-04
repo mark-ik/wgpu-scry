@@ -43,9 +43,11 @@ pub use config::WpeProducerConfig;
 pub use producer::WpeProducer;
 
 use crate::native_frame::{CapabilityStatus, NativeFrameKind, UnsupportedReason};
-use crate::{SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceFeatureCapabilities, WebSurfaceMode};
 #[cfg(feature = "wpe")]
 use crate::{CookieCapabilities, ScriptCapabilities};
+use crate::{
+    SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceFeatureCapabilities, WebSurfaceMode,
+};
 
 pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
     if cfg!(feature = "wpe") {
@@ -56,9 +58,7 @@ pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
             native_child_overlay: CapabilityStatus::Unsupported(
                 UnsupportedReason::PlatformNotImplemented,
             ),
-            cpu_snapshot: CapabilityStatus::Unsupported(
-                UnsupportedReason::PlatformNotImplemented,
-            ),
+            cpu_snapshot: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
             supported_frames: vec![NativeFrameKind::DmaBufImage],
             reason: "WPE is the Linux primary backend: a headless WPEDisplay + WebKitWebView produces DmaBufImage frames, and a compatible wgpu Vulkan host imports them through Graft.",
             features: wpe_features(),
@@ -73,9 +73,7 @@ pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
             native_child_overlay: CapabilityStatus::Unsupported(
                 UnsupportedReason::PlatformNotImplemented,
             ),
-            cpu_snapshot: CapabilityStatus::Unsupported(
-                UnsupportedReason::PlatformNotImplemented,
-            ),
+            cpu_snapshot: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
             supported_frames: Vec::new(),
             reason: "WPE is a compile-only producer shell until the `wpe` feature is enabled; enable it to build the WPEPlatform FFI bridge and DMABUF frame production.",
             features: wpe_features(),
@@ -95,15 +93,19 @@ fn wpe_features() -> WebSurfaceFeatureCapabilities {
                     UnsupportedReason::PlatformNotImplemented,
                 ),
                 same_site: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
-                partitioned: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+                partitioned: CapabilityStatus::Unsupported(
+                    UnsupportedReason::PlatformNotImplemented,
+                ),
                 http_only: CapabilityStatus::Supported,
                 secure: CapabilityStatus::Supported,
                 expires: CapabilityStatus::Supported,
             },
             script: ScriptCapabilities {
-                execute: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
-                result: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
-                exceptions: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+                execute: CapabilityStatus::Supported,
+                result: CapabilityStatus::Supported,
+                exceptions: CapabilityStatus::Partial(
+                    "WPE reports JavaScript failures as completion text rather than structured exception fields.",
+                ),
                 bounded_blocking: CapabilityStatus::Unsupported(
                     UnsupportedReason::PlatformNotImplemented,
                 ),
@@ -168,7 +170,16 @@ mod tests {
         assert_eq!(caps.preferred_mode, WebSurfaceMode::ImportedTexture);
         assert_eq!(caps.imported_texture, CapabilityStatus::Supported);
         assert_eq!(caps.supported_frames, vec![NativeFrameKind::DmaBufImage]);
-        assert!(matches!(caps.features.pointer_input, CapabilityStatus::Partial(_)));
+        assert!(matches!(
+            caps.features.pointer_input,
+            CapabilityStatus::Partial(_)
+        ));
         assert!(matches!(caps.features.ime, CapabilityStatus::Partial(_)));
+        assert_eq!(caps.features.script.execute, CapabilityStatus::Supported);
+        assert_eq!(caps.features.script.result, CapabilityStatus::Supported);
+        assert!(matches!(
+            caps.features.script.bounded_blocking,
+            CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented)
+        ));
     }
 }

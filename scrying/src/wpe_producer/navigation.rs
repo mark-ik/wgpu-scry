@@ -15,7 +15,9 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::{NavigationEvent, WebSurfaceError};
+use crate::{NavigationEvent, WebSurfaceError, WebSurfaceEvent};
+
+use super::producer::WebSurfaceEventQueue;
 
 /// `WebKitLoadEvent` from `/usr/include/wpe-webkit-2.0/wpe/WebKitWebView.h`
 /// (the int values land in the glib closure as `i32`).
@@ -39,33 +41,45 @@ pub(super) struct NavState {
 impl NavState {
     /// Apply a `load-changed` event. `uri` is the WebKitWebView's current URI
     /// at the time the signal fired (may be empty for inline HTML).
-    pub fn on_load_changed(&mut self, event: i32, uri: String) {
-        match event {
+    pub fn on_load_changed(&mut self, event: i32, uri: String) -> Option<NavigationEvent> {
+        let navigation_event = match event {
             WEBKIT_LOAD_STARTED => {
                 self.finished = false;
                 self.failed = None;
-                self.events.push_back(NavigationEvent::Starting { url: uri });
+                Some(NavigationEvent::Starting { url: uri })
             }
             WEBKIT_LOAD_COMMITTED => {
                 self.committed_uri = Some(uri.clone());
-                self.events.push_back(NavigationEvent::SourceChanged { url: uri });
+                Some(NavigationEvent::SourceChanged { url: uri })
             }
             WEBKIT_LOAD_FINISHED => {
                 self.finished = true;
-                self.events.push_back(NavigationEvent::Completed { url: uri, success: true });
+                Some(NavigationEvent::Completed {
+                    url: uri,
+                    success: true,
+                })
             }
             // Redirected fires between Started and Committed — no scrying
             // variant for it, so skip (matches GTK).
-            _ => {}
+            _ => None,
+        };
+        if let Some(event) = navigation_event.as_ref() {
+            self.events.push_back(event.clone());
         }
+        navigation_event
     }
 
     /// Apply a `load-failed` event. `error` is the GError message.
-    pub fn on_load_failed(&mut self, uri: String, error: String) {
+    pub fn on_load_failed(&mut self, uri: String, error: String) -> NavigationEvent {
         self.failed = Some(error);
         // Unblock waiters; trait-level navigate methods inspect `failed`.
         self.finished = true;
-        self.events.push_back(NavigationEvent::Completed { url: uri, success: false });
+        let event = NavigationEvent::Completed {
+            url: uri,
+            success: false,
+        };
+        self.events.push_back(event.clone());
+        event
     }
 }
 
@@ -90,32 +104,40 @@ use glib::prelude::*;
 /// i32 ...)` fails its arg-type check. We hand-roll a `RustClosure` over
 /// `&[glib::Value]` and pull the enum out via `value.get::<i32>()` —
 /// glib's value transform tables include enum→gint, which works here.
-pub(super) fn install_load_signals(webview: &glib::Object, state: &Rc<RefCell<NavState>>) {
+pub(super) fn install_load_signals(
+    webview: &glib::Object,
+    state: &Rc<RefCell<NavState>>,
+    ordered_events: WebSurfaceEventQueue,
+) {
     {
         let s = state.clone();
+        let ordered = ordered_events.clone();
         let closure = glib::RustClosure::new_local(move |values| {
             // values: [view: GObject, event: WebKitLoadEvent]
             let view = values[0]
                 .get::<glib::Object>()
                 .expect("load-changed: arg 0 must be GObject");
-            let event = values[1]
-                .get::<i32>()
-                .unwrap_or_else(|_| {
-                    // Fallback: read raw enum value through transform.
-                    values[1]
-                        .transform::<i32>()
-                        .ok()
-                        .and_then(|v| v.get::<i32>().ok())
-                        .unwrap_or(-1)
-                });
+            let event = values[1].get::<i32>().unwrap_or_else(|_| {
+                // Fallback: read raw enum value through transform.
+                values[1]
+                    .transform::<i32>()
+                    .ok()
+                    .and_then(|v| v.get::<i32>().ok())
+                    .unwrap_or(-1)
+            });
             let uri = view.property::<String>("uri");
-            s.borrow_mut().on_load_changed(event, uri);
+            if let Some(event) = s.borrow_mut().on_load_changed(event, uri) {
+                ordered
+                    .borrow_mut()
+                    .push_back(WebSurfaceEvent::Navigation(event));
+            }
             None
         });
         webview.connect_closure("load-changed", false, closure);
     }
     {
         let s = state.clone();
+        let ordered = ordered_events;
         let closure = glib::RustClosure::new_local(move |values| {
             // values: [view, event, failing_uri: &str, error: GError]
             let failing_uri = values
@@ -127,7 +149,10 @@ pub(super) fn install_load_signals(webview: &glib::Object, state: &Rc<RefCell<Na
                 .and_then(|v| v.get::<glib::Error>().ok())
                 .map(|e| e.message().to_string())
                 .unwrap_or_else(|| "(error message unavailable)".to_string());
-            s.borrow_mut().on_load_failed(failing_uri, err_msg);
+            let event = s.borrow_mut().on_load_failed(failing_uri, err_msg);
+            ordered
+                .borrow_mut()
+                .push_back(WebSurfaceEvent::Navigation(event));
             // load-failed expects a gboolean return (FALSE = let WebKit
             // show its default error page).
             Some(false.to_value())
@@ -146,7 +171,9 @@ pub(super) fn wait_for_load(
     let deadline = Instant::now() + timeout;
     super::headless::pump_until(ctx, deadline, || state.borrow().finished)?;
     if let Some(msg) = state.borrow().failed.clone() {
-        return Err(WebSurfaceError::Platform(format!("navigation failed: {msg}")));
+        return Err(WebSurfaceError::Platform(format!(
+            "navigation failed: {msg}"
+        )));
     }
     Ok(())
 }
@@ -154,16 +181,20 @@ pub(super) fn wait_for_load(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NavigationEvent;
+    use crate::{NavigationEvent, WebSurfaceEvent};
 
-    fn st() -> Rc<RefCell<NavState>> { Rc::new(RefCell::new(NavState::default())) }
+    fn st() -> Rc<RefCell<NavState>> {
+        Rc::new(RefCell::new(NavState::default()))
+    }
 
     #[test]
     fn started_clears_flags_and_emits_starting() {
         let s = st();
         s.borrow_mut().finished = true;
         s.borrow_mut().failed = Some("old".into());
-        s.borrow_mut().on_load_changed(WEBKIT_LOAD_STARTED, "https://x".into());
+        let _ = s
+            .borrow_mut()
+            .on_load_changed(WEBKIT_LOAD_STARTED, "https://x".into());
         let st = s.borrow();
         assert!(!st.finished);
         assert!(st.failed.is_none());
@@ -174,7 +205,9 @@ mod tests {
     #[test]
     fn committed_stores_uri_and_emits_source_changed() {
         let s = st();
-        s.borrow_mut().on_load_changed(WEBKIT_LOAD_COMMITTED, "https://y".into());
+        let _ = s
+            .borrow_mut()
+            .on_load_changed(WEBKIT_LOAD_COMMITTED, "https://y".into());
         let st = s.borrow();
         assert_eq!(st.committed_uri.as_deref(), Some("https://y"));
         assert!(matches!(st.events.front(),
@@ -184,7 +217,9 @@ mod tests {
     #[test]
     fn finished_sets_flag_and_emits_completed_success() {
         let s = st();
-        s.borrow_mut().on_load_changed(WEBKIT_LOAD_FINISHED, "https://z".into());
+        let _ = s
+            .borrow_mut()
+            .on_load_changed(WEBKIT_LOAD_FINISHED, "https://z".into());
         let st = s.borrow();
         assert!(st.finished);
         assert!(matches!(st.events.front(),
@@ -194,14 +229,18 @@ mod tests {
     #[test]
     fn redirected_is_a_no_op_on_events() {
         let s = st();
-        s.borrow_mut().on_load_changed(WEBKIT_LOAD_REDIRECTED, "https://w".into());
+        let _ = s
+            .borrow_mut()
+            .on_load_changed(WEBKIT_LOAD_REDIRECTED, "https://w".into());
         assert!(s.borrow().events.is_empty());
     }
 
     #[test]
     fn load_failed_sets_failed_and_finished_and_emits_completed_failure() {
         let s = st();
-        s.borrow_mut().on_load_failed("https://q".into(), "boom".into());
+        let _ = s
+            .borrow_mut()
+            .on_load_failed("https://q".into(), "boom".into());
         let st = s.borrow();
         assert_eq!(st.failed.as_deref(), Some("boom"));
         assert!(st.finished);
@@ -212,12 +251,41 @@ mod tests {
     #[test]
     fn arm_clears_flags_keeps_events() {
         let s = st();
-        s.borrow_mut().on_load_changed(WEBKIT_LOAD_FINISHED, "x".into());
+        let _ = s
+            .borrow_mut()
+            .on_load_changed(WEBKIT_LOAD_FINISHED, "x".into());
         arm_navigation(&s);
         let st = s.borrow();
         assert!(!st.finished);
         assert!(st.failed.is_none());
         assert!(st.committed_uri.is_none());
-        assert_eq!(st.events.len(), 1, "events queue is drained by poll, not by arm");
+        assert_eq!(
+            st.events.len(),
+            1,
+            "events queue is drained by poll, not by arm"
+        );
+    }
+
+    #[test]
+    fn navigation_callback_value_can_be_mirrored_to_ordered_stream() {
+        let state = st();
+        let ordered = Rc::new(RefCell::new(VecDeque::new()));
+        let event = state
+            .borrow_mut()
+            .on_load_changed(WEBKIT_LOAD_COMMITTED, "https://ordered.test".into())
+            .expect("committed event");
+        ordered
+            .borrow_mut()
+            .push_back(WebSurfaceEvent::Navigation(event));
+
+        assert!(matches!(
+            state.borrow_mut().events.pop_front(),
+            Some(NavigationEvent::SourceChanged { url }) if url == "https://ordered.test"
+        ));
+        assert!(matches!(
+            ordered.borrow_mut().pop_front(),
+            Some(WebSurfaceEvent::Navigation(NavigationEvent::SourceChanged { url }))
+                if url == "https://ordered.test"
+        ));
     }
 }

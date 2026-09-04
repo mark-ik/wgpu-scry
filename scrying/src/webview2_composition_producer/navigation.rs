@@ -93,7 +93,18 @@ impl WebView2CompositionProducer {
 
     /// Drain the next pending [`NavigationEvent`] from the producer's queue.
     pub fn poll_navigation_event(&self) -> Option<NavigationEvent> {
-        self.nav_event_queue.lock().ok()?.pop_front()
+        let event = self.nav_event_queue.lock().ok()?.pop_front()?;
+        let mut ordered = self
+            .web_surface_event_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(index) = ordered
+            .iter()
+            .position(|event| matches!(event, WebSurfaceEvent::Navigation(_)))
+        {
+            ordered.remove(index);
+        }
+        Some(event)
     }
 
     /// Post a string message into `window.chrome.webview` for the page's
@@ -228,7 +239,82 @@ impl WebView2CompositionProducer {
     /// Drain the next pending message posted from JS via
     /// `window.chrome.webview.postMessage(...)`.
     pub fn poll_web_message(&self) -> Option<String> {
-        self.web_message_queue.lock().ok()?.pop_front()
+        let message = self.web_message_queue.lock().ok()?.pop_front()?;
+        let mut ordered = self
+            .web_surface_event_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(index) = ordered
+            .iter()
+            .position(|event| matches!(event, WebSurfaceEvent::WebMessage(_)))
+        {
+            ordered.remove(index);
+        }
+        Some(message)
+    }
+
+    /// Drain the next native callback or asynchronous completion in callback
+    /// order. Draining this queue consumes the corresponding compatibility
+    /// mirror; callers must choose one polling API rather than mix them.
+    pub fn poll_web_surface_event(&self) -> Option<WebSurfaceEvent> {
+        let event = self
+            .web_surface_event_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop_front()?;
+        match &event {
+            WebSurfaceEvent::Navigation(_) => {
+                self.nav_event_queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .pop_front();
+            }
+            WebSurfaceEvent::WebMessage(_) => {
+                self.web_message_queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .pop_front();
+            }
+            _ => {}
+        }
+        Some(event)
+    }
+
+    /// Start result-bearing JavaScript execution without pumping the host
+    /// event loop. A successfully accepted request settles exactly once on
+    /// [`WebSurfaceEvent::ScriptCompleted`].
+    pub fn request_script_result(
+        &self,
+        id: WebRequestId,
+        script: &str,
+    ) -> Result<(), WebSurfaceError> {
+        let event_queue = self.web_surface_event_queue.clone();
+        let settled = Arc::new(AtomicBool::new(false));
+        let handler = ExecuteScriptCompletedHandler::create(Box::new({
+            let settled = settled.clone();
+            move |result: windows::core::Result<()>, json_result: String| {
+                if settled.swap(true, Ordering::AcqRel) {
+                    return Ok(());
+                }
+                let payload = result
+                    .map(|()| json_result)
+                    .map_err(|error| error.message().to_string());
+                event_queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push_back(WebSurfaceEvent::ScriptCompleted {
+                        id,
+                        result: payload,
+                    });
+                Ok(())
+            }
+        }));
+        let script = CoTaskMemPWSTR::from(script);
+        unsafe {
+            self.webview
+                .ExecuteScript(*script.as_ref().as_pcwstr(), &handler)
+                .map_err(platform("ExecuteScript"))
+        }
     }
 
     /// Reload the current page.
@@ -300,22 +386,50 @@ impl WebView2CompositionProducer {
     }
 }
 
+fn push_navigation_event(
+    nav_queue: &Arc<Mutex<VecDeque<NavigationEvent>>>,
+    web_surface_event_queue: &Arc<Mutex<VecDeque<WebSurfaceEvent>>>,
+    event: NavigationEvent,
+) {
+    if let Ok(mut queue) = nav_queue.lock() {
+        queue.push_back(event.clone());
+    }
+    web_surface_event_queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push_back(WebSurfaceEvent::Navigation(event));
+}
+
+fn push_web_message(
+    web_message_queue: &Arc<Mutex<VecDeque<String>>>,
+    web_surface_event_queue: &Arc<Mutex<VecDeque<WebSurfaceEvent>>>,
+    message: String,
+) {
+    if let Ok(mut queue) = web_message_queue.lock() {
+        queue.push_back(message.clone());
+    }
+    web_surface_event_queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push_back(WebSurfaceEvent::WebMessage(message));
+}
+
 pub(super) fn register_persistent_handlers(
     webview: &ICoreWebView2,
     nav_queue: Arc<Mutex<VecDeque<NavigationEvent>>>,
     web_message_queue: Arc<Mutex<VecDeque<String>>>,
+    web_surface_event_queue: Arc<Mutex<VecDeque<WebSurfaceEvent>>>,
     cookie_change_handler: Arc<Mutex<Option<WebView2CookieChangeHandlerFn>>>,
 ) -> Result<(i64, i64, i64, i64, i64, i64, i64), WebSurfaceError> {
     let queue = nav_queue.clone();
+    let event_queue = web_surface_event_queue.clone();
     let nav_starting_handler = NavigationStartingEventHandler::create(Box::new(move |_, args| {
         if let Some(args) = args {
             let mut uri = PWSTR::null();
             if unsafe { args.Uri(&mut uri) }.is_ok() {
                 let url = unsafe { consume_pwstr(uri) };
-                if let Ok(mut q) = queue.lock() {
-                    q.push_back(NavigationEvent::TextInputBlurred);
-                    q.push_back(NavigationEvent::Starting { url });
-                }
+                push_navigation_event(&queue, &event_queue, NavigationEvent::TextInputBlurred);
+                push_navigation_event(&queue, &event_queue, NavigationEvent::Starting { url });
             }
         }
         Ok(())
@@ -328,6 +442,7 @@ pub(super) fn register_persistent_handlers(
     }
 
     let queue = nav_queue.clone();
+    let event_queue = web_surface_event_queue.clone();
     let webview_for_handler = webview.clone();
     let nav_completed_handler =
         NavigationCompletedEventHandler::create(Box::new(move |_, args| {
@@ -344,9 +459,11 @@ pub(super) fn register_persistent_handlers(
             } else {
                 String::new()
             };
-            if let Ok(mut q) = queue.lock() {
-                q.push_back(NavigationEvent::Completed { url, success });
-            }
+            push_navigation_event(
+                &queue,
+                &event_queue,
+                NavigationEvent::Completed { url, success },
+            );
             Ok(())
         }));
     let mut nav_completed_token = 0i64;
@@ -357,6 +474,7 @@ pub(super) fn register_persistent_handlers(
     }
 
     let queue = nav_queue.clone();
+    let event_queue = web_surface_event_queue.clone();
     let source_changed_handler = SourceChangedEventHandler::create(Box::new(move |sender, _| {
         let Some(webview) = sender else { return Ok(()) };
         let mut source = PWSTR::null();
@@ -365,9 +483,7 @@ pub(super) fn register_persistent_handlers(
         } else {
             String::new()
         };
-        if let Ok(mut q) = queue.lock() {
-            q.push_back(NavigationEvent::SourceChanged { url });
-        }
+        push_navigation_event(&queue, &event_queue, NavigationEvent::SourceChanged { url });
         Ok(())
     }));
     let mut source_changed_token = 0i64;
@@ -378,6 +494,7 @@ pub(super) fn register_persistent_handlers(
     }
 
     let queue = nav_queue.clone();
+    let event_queue = web_surface_event_queue.clone();
     let title_changed_handler =
         DocumentTitleChangedEventHandler::create(Box::new(move |sender, _| {
             let Some(webview) = sender else { return Ok(()) };
@@ -387,9 +504,11 @@ pub(super) fn register_persistent_handlers(
             } else {
                 String::new()
             };
-            if let Ok(mut q) = queue.lock() {
-                q.push_back(NavigationEvent::TitleChanged { title });
-            }
+            push_navigation_event(
+                &queue,
+                &event_queue,
+                NavigationEvent::TitleChanged { title },
+            );
             Ok(())
         }));
     let mut title_changed_token = 0i64;
@@ -400,14 +519,17 @@ pub(super) fn register_persistent_handlers(
     }
 
     let queue = nav_queue.clone();
+    let event_queue = web_surface_event_queue.clone();
     let new_window_handler = NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
         if let Some(args) = args {
             let mut uri = PWSTR::null();
             if unsafe { args.Uri(&mut uri) }.is_ok() {
                 let url = unsafe { consume_pwstr(uri) };
-                if let Ok(mut q) = queue.lock() {
-                    q.push_back(NavigationEvent::NewWindowRequested { url: url.clone() });
-                }
+                push_navigation_event(
+                    &queue,
+                    &event_queue,
+                    NavigationEvent::NewWindowRequested { url },
+                );
             }
             unsafe { args.SetHandled(true)? };
         }
@@ -421,15 +543,19 @@ pub(super) fn register_persistent_handlers(
     }
 
     let queue = nav_queue.clone();
+    let event_queue = web_surface_event_queue.clone();
     let process_failed_handler = ProcessFailedEventHandler::create(Box::new(move |_, args| {
         if let Some(args) = args {
             let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND(0);
             if unsafe { args.ProcessFailedKind(&mut kind) }.is_ok()
                 && is_content_process_failure(kind)
-                && let Ok(mut q) = queue.lock()
             {
-                q.push_back(NavigationEvent::TextInputBlurred);
-                q.push_back(NavigationEvent::ContentProcessTerminated);
+                push_navigation_event(&queue, &event_queue, NavigationEvent::TextInputBlurred);
+                push_navigation_event(
+                    &queue,
+                    &event_queue,
+                    NavigationEvent::ContentProcessTerminated,
+                );
             }
         }
         Ok(())
@@ -443,6 +569,7 @@ pub(super) fn register_persistent_handlers(
 
     let queue = web_message_queue;
     let nav_queue_for_messages = nav_queue.clone();
+    let event_queue = web_surface_event_queue;
     let cookie_handler = cookie_change_handler;
     let web_message_handler = WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
         if let Some(args) = args {
@@ -458,32 +585,22 @@ pub(super) fn register_persistent_handlers(
                     return Ok(());
                 }
                 if let Some(event) = browser::parse_context_menu_bridge_message(&s) {
-                    if let Ok(mut q) = nav_queue_for_messages.lock() {
-                        q.push_back(event);
-                    }
+                    push_navigation_event(&nav_queue_for_messages, &event_queue, event);
                     return Ok(());
                 }
                 if let Some(event) = browser::parse_drop_detected_bridge_message(&s) {
-                    if let Ok(mut q) = nav_queue_for_messages.lock() {
-                        q.push_back(event);
-                    }
+                    push_navigation_event(&nav_queue_for_messages, &event_queue, event);
                     return Ok(());
                 }
                 if let Some(event) = browser::parse_media_capture_bridge_message(&s) {
-                    if let Ok(mut q) = nav_queue_for_messages.lock() {
-                        q.push_back(event);
-                    }
+                    push_navigation_event(&nav_queue_for_messages, &event_queue, event);
                     return Ok(());
                 }
                 if let Some(event) = browser::parse_text_input_bridge_message(&s) {
-                    if let Ok(mut q) = nav_queue_for_messages.lock() {
-                        q.push_back(event);
-                    }
+                    push_navigation_event(&nav_queue_for_messages, &event_queue, event);
                     return Ok(());
                 }
-                if let Ok(mut q) = queue.lock() {
-                    q.push_back(s);
-                }
+                push_web_message(&queue, &event_queue, s);
             }
         }
         Ok(())
@@ -514,4 +631,43 @@ fn is_content_process_failure(kind: COREWEBVIEW2_PROCESS_FAILED_KIND) -> bool {
             | COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED
             | COREWEBVIEW2_PROCESS_FAILED_KIND_UNKNOWN_PROCESS_EXITED
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_callback_is_duplicated_without_reordering() {
+        let legacy = Arc::new(Mutex::new(VecDeque::new()));
+        let ordered = Arc::new(Mutex::new(VecDeque::new()));
+        let event = NavigationEvent::Starting {
+            url: "https://example.test/".into(),
+        };
+
+        push_navigation_event(&legacy, &ordered, event.clone());
+
+        assert!(
+            matches!(legacy.lock().unwrap().pop_front(), Some(value) if matches!(value, NavigationEvent::Starting { .. }))
+        );
+        assert!(
+            matches!(ordered.lock().unwrap().pop_front(), Some(WebSurfaceEvent::Navigation(value)) if matches!(value, NavigationEvent::Starting { .. }))
+        );
+    }
+
+    #[test]
+    fn page_message_is_duplicated_without_reordering() {
+        let legacy = Arc::new(Mutex::new(VecDeque::new()));
+        let ordered = Arc::new(Mutex::new(VecDeque::new()));
+
+        push_web_message(&legacy, &ordered, "message".into());
+
+        assert_eq!(
+            legacy.lock().unwrap().pop_front().as_deref(),
+            Some("message")
+        );
+        assert!(
+            matches!(ordered.lock().unwrap().pop_front(), Some(WebSurfaceEvent::WebMessage(value)) if value == "message")
+        );
+    }
 }

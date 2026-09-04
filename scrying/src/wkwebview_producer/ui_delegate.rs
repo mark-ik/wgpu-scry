@@ -80,9 +80,7 @@ define_class!(
             .map(|s| s.to_string())
             .unwrap_or_default();
             if let Ok(mut state) = self.ivars().state.lock() {
-                state
-                    .events
-                    .push_back(NavigationEvent::NewWindowRequested { url });
+                state.push_navigation_event(NavigationEvent::NewWindowRequested { url });
             }
             std::ptr::null_mut()
         }

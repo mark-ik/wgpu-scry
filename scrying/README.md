@@ -46,9 +46,10 @@ Platform selection is intentionally split:
 - **Navigation** — `navigate_to_string`, `navigate_to_url`. Both block until `NavigationCompleted`.
 - **History** — `reload`, `stop`, `go_back`, `go_forward`, `can_go_back`, `can_go_forward`.
 - **Input** — `send_mouse_input` (mouse + scroll + leave), `send_pointer_input` (touch / pen with pressure + tilt), `move_focus` (Programmatic / Next / Previous tab order). Drag-and-drop is implemented on the Windows producer's concrete type as `drag_enter` / `drag_over` / `drag_leave` / `drop_data` — the host supplies an `IDataObject` from its OLE drop-target callbacks. The trait-level `send_drag_input` stays platform-abstract; full cross-platform DnD waits for a unified data-carrier abstraction.
-- **Lifecycle events** — `poll_navigation_event` drains a FIFO queue of `Starting` / `SourceChanged` / `Completed` / `TitleChanged` events.
+- **Ordered events** — `poll_web_surface_event` is the authoritative FIFO for navigation, page messages, and correlated command completions. `poll_navigation_event` and `poll_web_message` remain compatibility views; consumers choose one polling API, and draining either view consumes its mirror so an unused queue does not grow without bound.
 - **Cursor reporting** — `poll_cursor_shape` returns the next [`CursorShape`] the engine wants the host to display (Pointer over a link, Text in an input, etc.).
-- **JS messaging** — `post_web_message` (Rust → JS via `window.chrome.webview` listeners), `poll_web_message` (JS → Rust via `window.chrome.webview.postMessage`).
+- **JS and messaging** — `request_script_result(WebRequestId, script)` completes asynchronously as `WebSurfaceEvent::ScriptCompleted`; `post_web_message` and the page bridge cover host/page messages.
+- **Cookies** — `request_cookies_for_url(WebRequestId, url)` completes asynchronously on WebView2 and WPE. WKWebView retains its direct all-cookie API and refuses URL-scoped reads because its translated cookie shape cannot preserve host-only matching.
 - **DevTools** — `open_devtools_window` opens the engine's developer-tools UI.
 - **Settings** — `apply_settings(&WebSurfaceSettings)` accepts a partial update of zoom factor, user-agent string, JS-enabled, devtools-enabled, default-context-menus, and built-in accelerator keys. `None` fields are left at the producer's current value.
 - **Profiles** — platform configs take a persistent data directory. `non_persistent()` switches supported producers into incognito/private mode so browser-shaped hosts can create temporary tiles without touching the persistent profile.
@@ -76,8 +77,9 @@ accessibility. `degradation_reasons` carries stable explanations for backend
 limits such as host API mismatches, reduced pointer metadata, and GTK's
 blocking CPU snapshot path.
 
-The current honest limits are important: WebKitGTK and WPE do not expose
-script results through the portable producer trait; WKWebView cannot open
+The current honest limits are important: the two optional WebKitGTK producers
+do not expose correlated script results; WKWebView cannot perform an exact
+URL-scoped cookie read, open
 Safari Web Inspector or synthesize capture-mode drag payloads; WebView2's
 portable drag method cannot carry its required `IDataObject`; and none of the
 four producers exports an accessibility tree. Cookie `SameSite` and

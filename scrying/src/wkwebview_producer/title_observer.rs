@@ -75,9 +75,7 @@ define_class!(
                 .map(|s| s.to_string())
                 .unwrap_or_default();
             if let Ok(mut state) = ivars.nav_state.lock() {
-                state
-                    .events
-                    .push_back(NavigationEvent::TitleChanged { title });
+                state.push_navigation_event(NavigationEvent::TitleChanged { title });
             }
         }
     }

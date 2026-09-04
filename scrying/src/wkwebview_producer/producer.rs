@@ -41,7 +41,7 @@ use super::download_handler::{
     DownloadHandler, DownloadHandlerFn, DownloadIdAllocator, DownloadRegistry,
 };
 use super::helpers::{backing_scale_for, ns_rect_from_pixels, profile_uuid_for_path};
-use super::nav_delegate::{AuthHandlerFn, NavDelegate, NavState};
+use super::nav_delegate::{AuthHandlerFn, NavDelegate, NavState, WebSurfaceEventQueue};
 
 /// Host-registered cursor-change handler. Invoked synchronously
 /// on the main thread inside [`super::WkWebViewProducer::send_mouse_input`]
@@ -97,6 +97,9 @@ pub struct WkWebViewProducer {
     /// `window.chrome.webview.postMessage(...)`, drained by
     /// [`Self::poll_web_message`].
     pub(super) web_messages: Arc<Mutex<VecDeque<String>>>,
+    /// Ordered native callbacks and result-bearing completion events. Legacy
+    /// navigation and page-message queues retain independent copies.
+    pub(super) web_surface_event_queue: WebSurfaceEventQueue,
     /// Last [`CursorShape`] we observed via `NSCursor.currentSystemCursor`
     /// after a forwarded pointer event. The producer pushes to
     /// [`Self::cursor_shapes`] only when the new shape differs from
@@ -322,9 +325,17 @@ impl WkWebViewProducer {
         // — both user scripts and their `WKScriptMessageHandler`s
         // need to be on the configuration's `WKUserContentController`
         // when the WKWebView is initialized.
-        let nav_state = Arc::new(Mutex::new(NavState::default()));
+        let web_surface_event_queue: WebSurfaceEventQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let nav_state = Arc::new(Mutex::new(NavState {
+            web_surface_events: Arc::clone(&web_surface_event_queue),
+            ..NavState::default()
+        }));
         let web_messages: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let script_message_handler = ScriptMessageHandler::new(mtm, Arc::clone(&web_messages));
+        let script_message_handler = ScriptMessageHandler::new(
+            mtm,
+            Arc::clone(&web_messages),
+            Arc::clone(&web_surface_event_queue),
+        );
         let context_menu_handler = ContextMenuMessageHandler::new(mtm, Arc::clone(&nav_state));
         let media_capture_handler = MediaCaptureMessageHandler::new(mtm, Arc::clone(&nav_state));
         let drop_handler = DropMessageHandler::new(mtm, Arc::clone(&nav_state));
@@ -548,6 +559,7 @@ impl WkWebViewProducer {
             _script_message_handler: script_message_handler,
             title_observer,
             web_messages,
+            web_surface_event_queue,
             last_cursor_shape: None,
             cursor_shapes: VecDeque::new(),
             config,

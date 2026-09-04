@@ -9,12 +9,14 @@ the page.
 Extracted from
 [`wgpu-graft`](https://github.com/merely-made/wgpu-graft) on 2026-05-05.
 
-## Status (2026-08-31)
+## Status (2026-09-04)
 
-`scrying` 0.6.0 is published on crates.io and working across all five
-backends; `main` is the 0.7.0 compatibility revision, where native frame
-resources have move-only, RAII custody. It carries feature-selected wgpu 28/29/30,
-defaults to wgpu 30, and requires at least wgpu 30.0.1 on that row.
+`scrying` 0.7.0 is published on crates.io and working across all five
+backends; `main` prepares the 0.7.1 callback-order revision. Native frame
+resources have move-only, RAII custody, and the primary WebView2, WKWebView,
+and WPE producers expose correlated asynchronous script results through one
+ordered event queue. It carries feature-selected wgpu 28/29/30, defaults to
+wgpu 30, and requires at least wgpu 30.0.1 on that row.
 
 - Frame transports are proven per platform: Windows WebView2 capture into a
   shared D3D11 texture imported by wgpu D3D12 (the reference
@@ -22,11 +24,11 @@ defaults to wgpu 30, and requires at least wgpu 30.0.1 on that row.
   Metal (macOS 14+); Linux WebKitGTK 4.1 and 6.0 via CPU snapshot; Linux WPE
   via DMABUF into Vulkan.
 - Beyond frames, the `WebSurfaceProducer` trait covers navigation, history,
-  input, JS messaging, cookies, custom schemes, downloads, profiles,
+  input, ordered events, correlated script results, cookies, custom schemes, downloads, profiles,
   popups, find, and PDF. Per-backend state and caveats live in
   [`docs/parity-matrix.md`](docs/parity-matrix.md).
-- DX12, Metal, and Vulkan/DMABUF imports delegate to the sibling `grafting`
-  crate at immutable revision `d671c96`; Scry keeps webview and sync policy.
+- DX12, Metal, and Vulkan/DMABUF imports delegate to published `grafting`
+  0.6.0; Scry keeps webview and sync policy.
 - CI runs the macOS suite, the WebKitGTK 4.1 Linux suite, and a required Fedora
   44 WPE producer/demo build on every push.
 

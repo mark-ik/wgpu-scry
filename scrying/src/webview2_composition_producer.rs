@@ -39,7 +39,7 @@ pub use setup::CompositionRoot;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -113,7 +113,7 @@ use crate::{
     CursorShape, DownloadDecision, DownloadDestinationRequest, DownloadId, FocusReason,
     KeyEventKind, KeyboardInput, MouseEventKind, MouseInput, NavigationEvent, PermissionDecision,
     PermissionKind, PermissionRequest, PhysicalKeyStatus, TextInputRect, TextInputState,
-    UrlSchemeHandlerFn, UrlSchemeResponse,
+    UrlSchemeHandlerFn, UrlSchemeResponse, WebRequestId, WebSurfaceEvent,
 };
 
 use crate::windows_capture::{
@@ -338,6 +338,7 @@ pub struct WebView2CompositionProducer {
     // push from the COM thread; consumer code drains from any thread.
     nav_event_queue: Arc<Mutex<VecDeque<NavigationEvent>>>,
     web_message_queue: Arc<Mutex<VecDeque<String>>>,
+    web_surface_event_queue: Arc<Mutex<VecDeque<WebSurfaceEvent>>>,
     cursor_queue: Arc<Mutex<VecDeque<CursorShape>>>,
     pending_cookies: Arc<Mutex<Option<Vec<Cookie>>>>,
     pending_find: Arc<Mutex<Option<Result<WebView2FindResult, String>>>>,
@@ -480,8 +481,28 @@ impl crate::WebSurfaceProducer for WebView2CompositionProducer {
         WebView2CompositionProducer::poll_web_message(self)
     }
 
+    fn poll_web_surface_event(&mut self) -> Option<WebSurfaceEvent> {
+        WebView2CompositionProducer::poll_web_surface_event(self)
+    }
+
     fn set_cookie(&mut self, cookie: &crate::Cookie) -> Result<(), WebSurfaceError> {
         WebView2CompositionProducer::set_cookie(self, cookie)
+    }
+
+    fn request_cookies_for_url(
+        &mut self,
+        id: WebRequestId,
+        url: &str,
+    ) -> Result<(), WebSurfaceError> {
+        WebView2CompositionProducer::request_cookies_for_url(self, id, url)
+    }
+
+    fn request_script_result(
+        &mut self,
+        id: WebRequestId,
+        script: &str,
+    ) -> Result<(), WebSurfaceError> {
+        WebView2CompositionProducer::request_script_result(self, id, script)
     }
 
     fn execute_script_with_result(

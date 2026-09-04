@@ -525,7 +525,8 @@ pub(crate) fn webview2_features_for_producer() -> WebSurfaceFeatureCapabilities 
 fn wkwebview_features() -> WebSurfaceFeatureCapabilities {
     let degradation_reasons = vec![
         "WKWebView cookie setters and reads do not round-trip SameSite or Partitioned attributes.",
-        "WKWebView does not expose execute-script results through the portable producer trait.",
+        "WKHTTPCookieStore exposes all-cookie reads but not an exact URL-scoped query; the portable URL request is refused because host-only matching cannot be reconstructed safely.",
+        "WKWebView script results complete asynchronously; JavaScript exception details are reduced to NSError text.",
         "WKWebView capture-mode drag forwarding cannot synthesize NSDraggingInfo; overlay drags remain native.",
         "WKWebView maps touch and pen input to mouse events, dropping pointer identity, pressure, and tilt.",
         "WKWebView exposes inspector attachment through setInspectable, but cannot open Safari Web Inspector programmatically.",
@@ -544,17 +545,23 @@ fn wkwebview_features() -> WebSurfaceFeatureCapabilities {
             expires: CapabilityStatus::Supported,
         },
         script: ScriptCapabilities {
-            execute: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
-            result: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
-            exceptions: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
-            bounded_blocking: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            execute: CapabilityStatus::Supported,
+            result: CapabilityStatus::Supported,
+            exceptions: CapabilityStatus::Partial(
+                "JavaScript exception details are reduced to NSError text.",
+            ),
+            bounded_blocking: CapabilityStatus::Unsupported(
+                UnsupportedReason::PlatformNotImplemented,
+            ),
         },
         page_capture: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
         devtools: CapabilityStatus::Partial("Safari Web Inspector must attach externally."),
         downloads: CapabilityStatus::Supported,
         popups: CapabilityStatus::Supported,
         drag_drop: CapabilityStatus::Partial("Capture-mode host drag payloads are unavailable."),
-        pointer_input: CapabilityStatus::Partial("Touch and pen metadata are reduced to mouse events."),
+        pointer_input: CapabilityStatus::Partial(
+            "Touch and pen metadata are reduced to mouse events.",
+        ),
         ime: CapabilityStatus::Supported,
         accessibility: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
         degradation_reasons,
@@ -1161,6 +1168,47 @@ pub struct Cookie {
     pub partitioned: bool,
 }
 
+/// Caller-minted identity for one accepted result-bearing web command.
+///
+/// IDs are scoped to one [`WebSurfaceProducer`]. The producer carries the
+/// exact value through its ordered [`WebSurfaceEvent`] queue so a host can
+/// settle the correct request without blocking its render or UI thread.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct WebRequestId(u64);
+
+impl WebRequestId {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// The authoritative ordered event stream for one web surface.
+///
+/// Legacy navigation and message pollers remain available for existing
+/// consumers, but must not be mixed with this queue: draining either view also
+/// consumes its mirrored event from the other view so an unused compatibility
+/// queue cannot grow without bound. New adapters should drain this queue.
+/// Accepted asynchronous commands settle exactly once. A synchronous
+/// acceptance error emits no completion event.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum WebSurfaceEvent {
+    Navigation(NavigationEvent),
+    WebMessage(String),
+    ScriptCompleted {
+        id: WebRequestId,
+        result: Result<String, String>,
+    },
+    CookiesCompleted {
+        id: WebRequestId,
+        result: Result<Vec<Cookie>, String>,
+    },
+}
+
 /// Reason supplied to a focus move.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -1658,11 +1706,46 @@ pub trait WebSurfaceProducer {
         None
     }
 
+    /// Drain the next event in native callback order.
+    ///
+    /// Implementations must use one queue for navigation, page messages, and
+    /// result-bearing command completions. An adapter must not reconstruct
+    /// order by polling the legacy type-specific queues in priority order.
+    fn poll_web_surface_event(&mut self) -> Option<WebSurfaceEvent> {
+        None
+    }
+
     /// Set / overwrite one cookie in the webview's store.
     fn set_cookie(&mut self, cookie: &Cookie) -> Result<(), WebSurfaceError> {
         let _ = cookie;
         Err(WebSurfaceError::Unsupported(
             "WebSurfaceProducer::set_cookie is not implemented for this platform",
+        ))
+    }
+
+    /// Begin a URL-scoped cookie read. Completion is delivered through
+    /// [`WebSurfaceEvent::CookiesCompleted`].
+    fn request_cookies_for_url(
+        &mut self,
+        id: WebRequestId,
+        url: &str,
+    ) -> Result<(), WebSurfaceError> {
+        let _ = (id, url);
+        Err(WebSurfaceError::Unsupported(
+            "WebSurfaceProducer::request_cookies_for_url is not implemented for this platform",
+        ))
+    }
+
+    /// Begin result-bearing JavaScript execution. Completion is delivered
+    /// through [`WebSurfaceEvent::ScriptCompleted`].
+    fn request_script_result(
+        &mut self,
+        id: WebRequestId,
+        script: &str,
+    ) -> Result<(), WebSurfaceError> {
+        let _ = (id, script);
+        Err(WebSurfaceError::Unsupported(
+            "WebSurfaceProducer::request_script_result is not implemented for this platform",
         ))
     }
 
@@ -1867,8 +1950,14 @@ mod tests {
             )
         );
         assert_eq!(caps.features.cookies.read, CapabilityStatus::Supported);
-        assert!(matches!(caps.features.cookies.same_site, CapabilityStatus::Unsupported(_)));
-        assert!(matches!(caps.features.cookies.partitioned, CapabilityStatus::Unsupported(_)));
+        assert!(matches!(
+            caps.features.cookies.same_site,
+            CapabilityStatus::Unsupported(_)
+        ));
+        assert!(matches!(
+            caps.features.cookies.partitioned,
+            CapabilityStatus::Unsupported(_)
+        ));
         assert_eq!(caps.features.script.result, CapabilityStatus::Supported);
         assert!(matches!(
             caps.features.script.exceptions,
@@ -1894,15 +1983,23 @@ mod tests {
     }
 
     #[test]
-    fn wkwebview_matrix_does_not_claim_unimplemented_operations() {
+    fn wkwebview_matrix_reports_async_script_and_remaining_limits() {
         let features = wkwebview_features();
+        assert_eq!(features.script.result, CapabilityStatus::Supported);
         assert!(matches!(
-            features.script.result,
+            features.script.exceptions,
+            CapabilityStatus::Partial(_)
+        ));
+        assert!(matches!(
+            features.script.bounded_blocking,
             CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented)
         ));
         assert!(matches!(features.devtools, CapabilityStatus::Partial(_)));
         assert_eq!(features.downloads, CapabilityStatus::Supported);
-        assert!(matches!(features.page_capture, CapabilityStatus::Unsupported(_)));
+        assert!(matches!(
+            features.page_capture,
+            CapabilityStatus::Unsupported(_)
+        ));
     }
 
     #[test]

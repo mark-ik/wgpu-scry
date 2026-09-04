@@ -275,7 +275,7 @@ define_class!(
             }
 
             if !cancelled_by_host && let Ok(mut state) = ivars.state.lock() {
-                state.events.push_back(NavigationEvent::DownloadStarted {
+                state.push_navigation_event(NavigationEvent::DownloadStarted {
                     id,
                     url,
                     suggested_filename: suggested,
@@ -343,7 +343,7 @@ define_class!(
             };
 
             if let Ok(mut state) = ivars.state.lock() {
-                state.events.push_back(NavigationEvent::DownloadProgress {
+                state.push_navigation_event(NavigationEvent::DownloadProgress {
                     id,
                     bytes_written,
                     total_bytes_expected,
@@ -368,14 +368,14 @@ define_class!(
                 && let Ok(mut state) = ivars.state.lock()
             {
                 let bytes_written = meta.len();
-                state.events.push_back(NavigationEvent::DownloadProgress {
+                state.push_navigation_event(NavigationEvent::DownloadProgress {
                     id,
                     bytes_written,
                     total_bytes_expected: total_bytes,
                 });
             }
             if let Ok(mut state) = ivars.state.lock() {
-                state.events.push_back(NavigationEvent::DownloadFinished {
+                state.push_navigation_event(NavigationEvent::DownloadFinished {
                     id,
                     destination_path,
                     error: None,
@@ -418,7 +418,7 @@ define_class!(
             // either path) is the authoritative signal.
             if entry.cancelled_by_host {
                 if let Ok(mut state) = ivars.state.lock() {
-                    state.events.push_back(NavigationEvent::DownloadCancelled {
+                    state.push_navigation_event(NavigationEvent::DownloadCancelled {
                         id: entry.id,
                         destination_path: entry.destination_path,
                         resume_data: resume_bytes,
@@ -429,7 +429,7 @@ define_class!(
 
             let msg = error.localizedDescription().to_string();
             if let Ok(mut state) = ivars.state.lock() {
-                state.events.push_back(NavigationEvent::DownloadFinished {
+                state.push_navigation_event(NavigationEvent::DownloadFinished {
                     id: entry.id,
                     destination_path: entry.destination_path,
                     error: Some(msg),
@@ -487,7 +487,7 @@ define_class!(
             };
 
             if let Ok(mut state) = ivars.state.lock() {
-                state.events.push_back(NavigationEvent::AuthChallenged {
+                state.push_navigation_event(NavigationEvent::AuthChallenged {
                     url: url.clone(),
                     host: host.clone(),
                     auth_method: auth_method.clone(),

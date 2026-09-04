@@ -8,19 +8,23 @@
 //! cross-platform trait surface onto the macOS-specific machinery in
 //! [`super::producer::WkWebViewProducer`] / sibling submodules.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use block2::RcBlock;
 use dpi::PhysicalSize;
+use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSEvent, NSEventType};
 use objc2_foundation::{
-    MainThreadMarker, NSDate, NSDefaultRunLoopMode, NSPoint, NSRunLoop, NSString, NSURL,
+    MainThreadMarker, NSDate, NSDefaultRunLoopMode, NSError, NSPoint, NSRunLoop, NSString, NSURL,
     NSURLRequest,
 };
 
 use crate::{
     CursorShape, DragInput, FocusReason, KeyEventKind, KeyboardInput, MouseEventKind, MouseInput,
-    MouseVirtualKeys, NavigationEvent, PointerDevice, PointerEventKind, PointerInput,
-    WebSurfaceCapabilities, WebSurfaceError, WebSurfaceFrame, WebSurfaceProducer,
+    MouseVirtualKeys, NavigationEvent, PointerDevice, PointerEventKind, PointerInput, WebRequestId,
+    WebSurfaceCapabilities, WebSurfaceError, WebSurfaceEvent, WebSurfaceFrame, WebSurfaceProducer,
     WebSurfaceSettings,
 };
 
@@ -148,10 +152,109 @@ impl WebSurfaceProducer for WkWebViewProducer {
     }
 
     fn poll_navigation_event(&mut self) -> Option<NavigationEvent> {
-        self.nav_state
+        let event = self
+            .nav_state
             .lock()
             .ok()
-            .and_then(|mut state| state.events.pop_front())
+            .and_then(|mut state| state.events.pop_front())?;
+        let mut ordered = self
+            .web_surface_event_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(index) = ordered
+            .iter()
+            .position(|event| matches!(event, WebSurfaceEvent::Navigation(_)))
+        {
+            ordered.remove(index);
+        }
+        Some(event)
+    }
+
+    fn poll_web_surface_event(&mut self) -> Option<WebSurfaceEvent> {
+        let event = self
+            .web_surface_event_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop_front()?;
+        match &event {
+            WebSurfaceEvent::Navigation(_) => {
+                self.nav_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .events
+                    .pop_front();
+            }
+            WebSurfaceEvent::WebMessage(_) => {
+                self.web_messages
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .pop_front();
+            }
+            _ => {}
+        }
+        Some(event)
+    }
+
+    fn request_cookies_for_url(
+        &mut self,
+        _id: WebRequestId,
+        _url: &str,
+    ) -> Result<(), WebSurfaceError> {
+        // `WKHTTPCookieStore` exposes only get-all-cookies. The shared `Cookie`
+        // payload does not retain Foundation's host-only/domain-cookie bit, so
+        // filtering the translated values could incorrectly send a host-only
+        // cookie to a subdomain. Do not claim browser-correct URL matching.
+        Err(WebSurfaceError::Unsupported(
+            "WKHTTPCookieStore does not expose an exact URL-scoped cookie query; scrying cannot safely reconstruct host-only matching from Cookie",
+        ))
+    }
+
+    fn request_script_result(
+        &mut self,
+        id: WebRequestId,
+        script: &str,
+    ) -> Result<(), WebSurfaceError> {
+        if MainThreadMarker::new().is_none() {
+            return Err(WebSurfaceError::Platform(
+                "request_script_result must be called on the main thread".into(),
+            ));
+        }
+
+        // WebKit otherwise returns an arbitrary Objective-C value. Ask the page
+        // for the same JSON-shaped result that the WebView2 contract exposes;
+        // direct eval preserves the caller's script semantics.
+        let source = format!("JSON.stringify(eval({}))", js_string_literal(script));
+        let source = NSString::from_str(&source);
+        let events = Arc::clone(&self.web_surface_event_queue);
+        let settled = Arc::new(AtomicBool::new(false));
+        let completion = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
+            if settled.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            // Apple's completion handler borrows both pointers only for
+            // this callback. Neither escapes it.
+            let result = unsafe { result.as_ref() };
+            let error = unsafe { error.as_ref() };
+            let result = match error {
+                Some(error) => Err(error.localizedDescription().to_string()),
+                None => match result.and_then(|value| value.downcast_ref::<NSString>()) {
+                    Some(value) => Ok(value.to_string()),
+                    // `JSON.stringify(undefined)` returns undefined; WebView2
+                    // reports that result as JSON null, so retain cross-engine
+                    // result semantics here.
+                    None => Ok("null".to_owned()),
+                },
+            };
+            events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push_back(WebSurfaceEvent::ScriptCompleted { id, result });
+        });
+        unsafe {
+            self.webview()
+                .evaluateJavaScript_completionHandler(&source, Some(&completion));
+        }
+        Ok(())
     }
 
     fn reload(&mut self) -> Result<(), WebSurfaceError> {
@@ -354,10 +457,22 @@ impl WebSurfaceProducer for WkWebViewProducer {
     }
 
     fn poll_web_message(&mut self) -> Option<String> {
-        self.web_messages
+        let message = self
+            .web_messages
             .lock()
             .ok()
-            .and_then(|mut q| q.pop_front())
+            .and_then(|mut q| q.pop_front())?;
+        let mut ordered = self
+            .web_surface_event_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(index) = ordered
+            .iter()
+            .position(|event| matches!(event, WebSurfaceEvent::WebMessage(_)))
+        {
+            ordered.remove(index);
+        }
+        Some(message)
     }
 
     fn send_keyboard_input(&mut self, event: KeyboardInput) -> Result<(), WebSurfaceError> {

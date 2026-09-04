@@ -50,6 +50,14 @@ pub struct JSCValue {
     _opaque: [u8; 0],
 }
 #[repr(C)]
+pub struct JSCContext {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct JSCException {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
 pub struct WPEEvent {
     _opaque: [u8; 0],
 }
@@ -253,6 +261,9 @@ unsafe extern "C" {
     // signal closure. `jsc_value_to_string` returns a heap-allocated C string
     // the caller must release with `g_free`.
     pub fn jsc_value_to_string(value: *mut JSCValue) -> *mut c_char;
+    pub fn jsc_value_get_context(value: *mut JSCValue) -> *mut JSCContext;
+    pub fn jsc_context_get_exception(context: *mut JSCContext) -> *mut JSCException;
+    pub fn jsc_exception_get_message(exception: *mut JSCException) -> *const c_char;
 
     pub fn webkit_web_view_evaluate_javascript(
         web_view: *mut WebKitWebView,
@@ -261,9 +272,14 @@ unsafe extern "C" {
         world_name: *const c_char,
         source_uri: *const c_char,
         cancellable: *mut std::ffi::c_void,
-        callback: *mut std::ffi::c_void,
+        callback: Option<GAsyncReadyCallback>,
         user_data: *mut std::ffi::c_void,
     );
+    pub fn webkit_web_view_evaluate_javascript_finish(
+        web_view: *mut WebKitWebView,
+        result: *mut GAsyncResult,
+        error: *mut *mut glib::ffi::GError,
+    ) -> *mut JSCValue;
 
     // --- Input event construction + dispatch (4c.4) ---
     // Signatures verified against

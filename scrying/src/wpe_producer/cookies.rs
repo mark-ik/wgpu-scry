@@ -56,8 +56,8 @@ use glib::translate::{ToGlibPtr, from_glib_none};
 use soup::Cookie as SoupCookie;
 
 use super::ffi;
-use super::producer::WpeProducer;
-use crate::{Cookie, WebSurfaceError};
+use super::producer::{WebSurfaceEventQueue, WpeProducer};
+use crate::{Cookie, WebRequestId, WebSurfaceError, WebSurfaceEvent};
 
 /// Deadline budget for any single cookie op. Matches the GTK precedent.
 const COOKIE_OP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -71,6 +71,40 @@ struct CookieOperation<T> {
     manager: glib::Object,
     cancellable: Cancellable,
     result: CookieResult<T>,
+}
+
+/// Callback-owned state for a non-blocking, URL-scoped cookie read. This is
+/// deliberately separate from the legacy synchronous `CookieOperation`: the
+/// new trait contract never pumps a nested GLib loop or waits for a result.
+struct CookieRequestOperation {
+    manager: glib::Object,
+    id: WebRequestId,
+    ordered_events: WebSurfaceEventQueue,
+}
+
+impl CookieRequestOperation {
+    /// SAFETY: `manager` is a live `WebKitCookieManager` borrowed from the
+    /// producer's WebView. `from_glib_none` adds the strong ref retained until
+    /// the native callback decodes the result.
+    unsafe fn new(
+        manager: *mut ffi::WebKitCookieManager,
+        id: WebRequestId,
+        ordered_events: WebSurfaceEventQueue,
+    ) -> Rc<Self> {
+        debug_assert!(!manager.is_null());
+        let manager: glib::Object = unsafe { from_glib_none(manager.cast()) };
+        Rc::new(Self {
+            manager,
+            id,
+            ordered_events,
+        })
+    }
+
+    fn manager(&self) -> *mut ffi::WebKitCookieManager {
+        ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.manager)
+            .0
+            .cast()
+    }
 }
 
 impl<T> CookieOperation<T> {
@@ -154,6 +188,37 @@ impl WpeProducer {
             ));
         }
         Ok(manager)
+    }
+
+    /// Begin a URL-scoped cookie read without blocking the producer's GLib
+    /// context. A successful start owns one callback reference, and that
+    /// callback appends exactly one `CookiesCompleted` event carrying the
+    /// caller's unchanged request id.
+    pub(super) fn begin_request_cookies_for_url(
+        &self,
+        id: WebRequestId,
+        url: &str,
+    ) -> Result<(), WebSurfaceError> {
+        let url = std::ffi::CString::new(url).map_err(|_| {
+            WebSurfaceError::Platform("request_cookies_for_url: URL contained interior NUL".into())
+        })?;
+        let operation = unsafe {
+            CookieRequestOperation::new(self.cookie_manager()?, id, self.web_surface_events.clone())
+        };
+        let raw_ud = callback_ref(&operation);
+        // SAFETY: `operation` owns a strong cookie-manager ref until the
+        // one-shot WebKit callback reclaims `raw_ud`. WebKit copies `url`
+        // during this call, so its CString need not outlive the start call.
+        unsafe {
+            ffi::webkit_cookie_manager_get_cookies(
+                operation.manager(),
+                url.as_ptr(),
+                std::ptr::null_mut(),
+                cookie_request_trampoline,
+                raw_ud,
+            );
+        }
+        Ok(())
     }
 
     /// Fetch all cookies the store currently has for `url`, blocking
@@ -322,30 +387,77 @@ unsafe extern "C" fn cookie_get_trampoline(
         *operation.result.borrow_mut() = Some(Err(msg));
         return;
     }
+    *operation.result.borrow_mut() = Some(Ok(unsafe { collect_cookies(g_list) }));
+}
+
+/// Completion trampoline for the ordered, non-blocking cookie request.
+/// It mirrors the legacy get callback's decode path, but settles by appending
+/// one event rather than spinning a nested main loop for the caller.
+unsafe extern "C" fn cookie_request_trampoline(
+    _source: *mut glib::gobject_ffi::GObject,
+    result: *mut ffi::GAsyncResult,
+    user_data: *mut std::ffi::c_void,
+) {
+    // SAFETY: callback_ref created exactly one strong callback reference for
+    // this accepted native request; WebKit invokes it exactly once.
+    let operation: Rc<CookieRequestOperation> = unsafe { take_callback_ref(user_data) };
+    let mut error: *mut glib::ffi::GError = std::ptr::null_mut();
+    let g_list = unsafe {
+        ffi::webkit_cookie_manager_get_cookies_finish(operation.manager(), result, &mut error)
+    };
+    let completion = if !error.is_null() {
+        // SAFETY: error returned by `_finish` is transfer-full.
+        Err(unsafe {
+            glib::translate::from_glib_full::<*mut glib::ffi::GError, glib::Error>(error)
+        }
+        .message()
+        .to_string())
+    } else {
+        // SAFETY: the list is transfer-full from `_finish` and is consumed
+        // before this callback returns.
+        Ok(unsafe { collect_cookies(g_list) })
+    };
+    operation
+        .ordered_events
+        .borrow_mut()
+        .push_back(WebSurfaceEvent::CookiesCompleted {
+            id: operation.id,
+            result: completion,
+        });
+}
+
+/// Convert and free the transfer-full `GList<SoupCookie*>` returned by WPE.
+///
+/// SAFETY: `g_list` must be the direct result from
+/// `webkit_cookie_manager_get_cookies_finish` and may be null for an empty
+/// result. This function consumes its list-node ownership exactly once.
+unsafe fn collect_cookies(g_list: *mut glib::ffi::GList) -> Vec<Cookie> {
     let mut cookies = Vec::new();
     let mut cur = g_list;
     while !cur.is_null() {
-        // SAFETY: walking the GList; (*cur).data is a SoupCookie* the
-        // list owns (transfer-full on the list, transfer-none for each
-        // element — `from_glib_none` adds a ref the Rust wrapper
-        // releases on Drop, keeping the cookie alive while we copy
-        // its fields out in soup_to_scry).
+        // SAFETY: walking the live transfer-full list. Each entry is borrowed
+        // from the list, so from_glib_none takes its own SoupCookie ref while
+        // copying the fields into the portable Cookie value.
         let item = unsafe { (*cur).data as *mut soup::ffi::SoupCookie };
         if !item.is_null() {
             let sc: SoupCookie = unsafe { glib::translate::from_glib_none(item) };
             cookies.push(soup_to_scry(sc));
         }
-        // SAFETY: GList nodes are valid until g_list_free below.
         cur = unsafe { (*cur).next };
     }
-    // SAFETY: g_list was transfer-full from _finish; free the list
-    // nodes. The SoupCookies the list referenced are now owned by the
-    // Rust wrappers we created via from_glib_none (each holds its own
-    // ref), so freeing the list doesn't dangle our pointers.
-    unsafe {
-        glib::ffi::g_list_free(g_list);
+    // SAFETY: WebKit transfers the list and every SoupCookie to the caller.
+    // `from_glib_none` above copied each cookie for the temporary Rust wrapper,
+    // so release the original elements and list nodes together.
+    unsafe { glib::ffi::g_list_free_full(g_list, Some(free_soup_cookie)) };
+    cookies
+}
+
+unsafe extern "C" fn free_soup_cookie(cookie: *mut std::ffi::c_void) {
+    if !cookie.is_null() {
+        // SAFETY: g_list_free_full calls this exactly once for each
+        // transfer-full SoupCookie pointer returned by WebKit.
+        unsafe { soup::ffi::soup_cookie_free(cookie.cast()) };
     }
-    *operation.result.borrow_mut() = Some(Ok(cookies));
 }
 
 /// Trampoline for `webkit_cookie_manager_add_cookie`.

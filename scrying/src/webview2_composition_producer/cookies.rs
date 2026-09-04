@@ -7,6 +7,46 @@
 use super::*;
 
 impl WebView2CompositionProducer {
+    /// Begin a URL-scoped cookie read without pumping the host event loop.
+    /// A successfully accepted request settles exactly once on
+    /// [`WebSurfaceEvent::CookiesCompleted`].
+    pub fn request_cookies_for_url(
+        &self,
+        id: WebRequestId,
+        url: &str,
+    ) -> Result<(), WebSurfaceError> {
+        let manager = self.cookie_manager()?;
+        let event_queue = self.web_surface_event_queue.clone();
+        let settled = Arc::new(AtomicBool::new(false));
+        let handler = GetCookiesCompletedHandler::create(Box::new({
+            let settled = settled.clone();
+            move |result, cookie_list| {
+                if settled.swap(true, Ordering::AcqRel) {
+                    return Ok(());
+                }
+                let payload = match result {
+                    Ok(()) => cookie_list
+                        .map(|list| unsafe { cookies_from_webview2_list(&list) })
+                        .transpose()
+                        .map(|cookies| cookies.unwrap_or_default())
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error.message().to_string()),
+                };
+                event_queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push_back(WebSurfaceEvent::CookiesCompleted {
+                        id,
+                        result: payload,
+                    });
+                Ok(())
+            }
+        }));
+        let url = CoTaskMemPWSTR::from(url);
+        unsafe { manager.GetCookies(*url.as_ref().as_pcwstr(), &handler) }
+            .map_err(platform("CookieManager.GetCookies"))
+    }
+
     /// Kick off an async fetch of every cookie in the WebView2 profile's
     /// cookie manager. Drain via [`Self::poll_cookies`].
     pub fn request_all_cookies(&mut self) -> Result<(), WebSurfaceError> {

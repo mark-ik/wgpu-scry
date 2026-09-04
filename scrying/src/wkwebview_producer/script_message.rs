@@ -29,7 +29,9 @@ use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
 use objc2_web_kit::{WKScriptMessage, WKScriptMessageHandler, WKUserContentController};
 
 use super::nav_delegate::NavState;
-use crate::NavigationEvent;
+use crate::{NavigationEvent, WebSurfaceEvent};
+
+use super::nav_delegate::WebSurfaceEventQueue;
 
 /// JS bridge handler name. JS-side code reaches the host via
 /// `window.webkit.messageHandlers.<NAME>.postMessage(...)`. The shim
@@ -85,13 +87,18 @@ pub(super) const HOST_BRIDGE_USER_SCRIPT: &str = r#"(function() {
 })();
 "#;
 
+pub(super) struct ScriptMessageHandlerState {
+    pub(super) messages: Arc<Mutex<VecDeque<String>>>,
+    pub(super) web_surface_events: WebSurfaceEventQueue,
+}
+
 define_class!(
     // SAFETY:
     // - The superclass NSObject has no subclassing requirements.
     // - `ScriptMessageHandler` does not implement `Drop`.
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
-    #[ivars = Arc<Mutex<VecDeque<String>>>]
+    #[ivars = ScriptMessageHandlerState]
     pub(super) struct ScriptMessageHandler;
 
     unsafe impl NSObjectProtocol for ScriptMessageHandler {}
@@ -99,20 +106,22 @@ define_class!(
     // SAFETY: signature matches Apple's `WKScriptMessageHandler` protocol.
     unsafe impl WKScriptMessageHandler for ScriptMessageHandler {
         #[unsafe(method(userContentController:didReceiveScriptMessage:))]
-        fn did_receive(
-            &self,
-            _ucc: &WKUserContentController,
-            message: &WKScriptMessage,
-        ) {
+        fn did_receive(&self, _ucc: &WKUserContentController, message: &WKScriptMessage) {
             let body = unsafe { message.body() };
             // The trait contract is "string messages." JS senders that
             // need to pass structured payloads should `JSON.stringify`
             // host-side; non-string bodies are dropped here rather
             // than coerced to lossy string forms.
-            if let Some(ns_string) = body.downcast_ref::<NSString>()
-                && let Ok(mut queue) = self.ivars().lock()
-            {
-                queue.push_back(ns_string.to_string());
+            if let Some(ns_string) = body.downcast_ref::<NSString>() {
+                let message = ns_string.to_string();
+                if let Ok(mut queue) = self.ivars().messages.lock() {
+                    queue.push_back(message.clone());
+                }
+                self.ivars()
+                    .web_surface_events
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push_back(WebSurfaceEvent::WebMessage(message));
             }
         }
     }
@@ -121,9 +130,13 @@ define_class!(
 impl ScriptMessageHandler {
     pub(super) fn new(
         mtm: MainThreadMarker,
-        queue: Arc<Mutex<VecDeque<String>>>,
+        messages: Arc<Mutex<VecDeque<String>>>,
+        web_surface_events: WebSurfaceEventQueue,
     ) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(queue);
+        let this = Self::alloc(mtm).set_ivars(ScriptMessageHandlerState {
+            messages,
+            web_surface_events,
+        });
         // SAFETY: NSObject's `init` returns a valid initialized instance.
         unsafe { msg_send![super(this), init] }
     }
@@ -237,7 +250,7 @@ define_class!(
                 image_url: (!parts[4].is_empty()).then(|| parts[4].to_string()),
             };
             if let Ok(mut state) = self.ivars().lock() {
-                state.events.push_back(event);
+                state.push_navigation_event(event);
             }
         }
     }
@@ -352,7 +365,7 @@ define_class!(
                 return;
             };
             if let Ok(mut state) = self.ivars().lock() {
-                state.events.push_back(NavigationEvent::MediaCaptureStateChanged {
+                state.push_navigation_event(NavigationEvent::MediaCaptureStateChanged {
                     audio_active_tracks: audio,
                     video_active_tracks: video,
                 });
@@ -467,7 +480,7 @@ define_class!(
                 primary_url: (!parts[3].is_empty()).then(|| parts[3].to_string()),
             };
             if let Ok(mut state) = self.ivars().lock() {
-                state.events.push_back(event);
+                state.push_navigation_event(event);
             }
         }
     }

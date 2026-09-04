@@ -25,7 +25,7 @@ use objc2_web_kit::{
     WKNavigationResponsePolicy, WKWebView,
 };
 
-use crate::{AuthChallenge, AuthDisposition, NavigationEvent};
+use crate::{AuthChallenge, AuthDisposition, NavigationEvent, WebSurfaceEvent};
 
 use super::download_handler::DownloadHandler;
 
@@ -40,6 +40,23 @@ pub(super) struct NavState {
     /// FIFO of [`NavigationEvent`]s observed by [`NavDelegate`] but
     /// not yet drained by `poll_navigation_event`.
     pub(super) events: VecDeque<NavigationEvent>,
+    /// The authoritative callback-order stream. The legacy navigation FIFO
+    /// deliberately retains its own copy for existing consumers.
+    pub(super) web_surface_events: WebSurfaceEventQueue,
+}
+
+pub(super) type WebSurfaceEventQueue = Arc<Mutex<VecDeque<WebSurfaceEvent>>>;
+
+impl NavState {
+    /// Record one native navigation callback in both public streams while the
+    /// callback is still executing, preserving WebKit's delivery order.
+    pub(super) fn push_navigation_event(&mut self, event: NavigationEvent) {
+        self.events.push_back(event.clone());
+        self.web_surface_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_back(WebSurfaceEvent::Navigation(event));
+    }
 }
 
 /// Host-registered auth-challenge handler (item 6, option B).
@@ -90,7 +107,7 @@ define_class!(
         fn did_start(&self, web_view: &WKWebView, _navigation: Option<&WKNavigation>) {
             let url = webview_url_string(web_view);
             if let Ok(mut state) = self.ivars().state.lock() {
-                state.events.push_back(NavigationEvent::Starting { url });
+                state.push_navigation_event(NavigationEvent::Starting { url });
             }
         }
 
@@ -98,9 +115,7 @@ define_class!(
         fn did_commit(&self, web_view: &WKWebView, _navigation: Option<&WKNavigation>) {
             let url = webview_url_string(web_view);
             if let Ok(mut state) = self.ivars().state.lock() {
-                state
-                    .events
-                    .push_back(NavigationEvent::SourceChanged { url });
+                state.push_navigation_event(NavigationEvent::SourceChanged { url });
             }
         }
 
@@ -108,9 +123,7 @@ define_class!(
         fn did_finish(&self, web_view: &WKWebView, _navigation: Option<&WKNavigation>) {
             let url = webview_url_string(web_view);
             if let Ok(mut state) = self.ivars().state.lock() {
-                state
-                    .events
-                    .push_back(NavigationEvent::Completed { url, success: true });
+                state.push_navigation_event(NavigationEvent::Completed { url, success: true });
                 state.result = Some(Ok(()));
             }
         }
@@ -125,7 +138,7 @@ define_class!(
             let url = webview_url_string(web_view);
             let message = error.localizedDescription().to_string();
             if let Ok(mut state) = self.ivars().state.lock() {
-                state.events.push_back(NavigationEvent::Completed {
+                state.push_navigation_event(NavigationEvent::Completed {
                     url,
                     success: false,
                 });
@@ -143,7 +156,7 @@ define_class!(
             let url = webview_url_string(web_view);
             let message = error.localizedDescription().to_string();
             if let Ok(mut state) = self.ivars().state.lock() {
-                state.events.push_back(NavigationEvent::Completed {
+                state.push_navigation_event(NavigationEvent::Completed {
                     url,
                     success: false,
                 });
@@ -158,9 +171,7 @@ define_class!(
         #[unsafe(method(webViewWebContentProcessDidTerminate:))]
         fn process_terminated(&self, _web_view: &WKWebView) {
             if let Ok(mut state) = self.ivars().state.lock() {
-                state
-                    .events
-                    .push_back(NavigationEvent::ContentProcessTerminated);
+                state.push_navigation_event(NavigationEvent::ContentProcessTerminated);
             }
         }
 
@@ -278,7 +289,7 @@ define_class!(
                 None => (String::new(), String::new(), String::new()),
             };
             if let Ok(mut state) = self.ivars().state.lock() {
-                state.events.push_back(NavigationEvent::AuthChallenged {
+                state.push_navigation_event(NavigationEvent::AuthChallenged {
                     url: url.clone(),
                     host: host.clone(),
                     auth_method: auth_method.clone(),
@@ -413,4 +424,27 @@ pub(super) fn read_protection_space(
     // so we retain to take ownership of a reference balanced against
     // our `Retained` Drop.
     unsafe { Retained::retain(non_null.as_ptr()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_callback_keeps_legacy_and_ordered_copies() {
+        let mut state = NavState::default();
+        state.push_navigation_event(NavigationEvent::Starting {
+            url: "https://example.test".into(),
+        });
+
+        assert!(matches!(
+            state.events.pop_front(),
+            Some(NavigationEvent::Starting { url }) if url == "https://example.test"
+        ));
+        assert!(matches!(
+            state.web_surface_events.lock().unwrap().pop_front(),
+            Some(WebSurfaceEvent::Navigation(NavigationEvent::Starting { url }))
+                if url == "https://example.test"
+        ));
+    }
 }

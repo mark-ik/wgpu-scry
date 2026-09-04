@@ -435,18 +435,16 @@ impl WkWebViewProducer {
         // size; expressing it as "we'll see when the bytes
         // land" matches WebKit's actual behavior.
         if let Ok(mut state) = self.nav_state.lock() {
-            state
-                .events
-                .push_back(crate::NavigationEvent::DownloadStarted {
-                    id,
-                    url: String::new(),
-                    suggested_filename: destination_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                    destination_path: destination_path.clone(),
-                    total_bytes_expected: None,
-                });
+            state.push_navigation_event(crate::NavigationEvent::DownloadStarted {
+                id,
+                url: String::new(),
+                suggested_filename: destination_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                destination_path: destination_path.clone(),
+                total_bytes_expected: None,
+            });
         }
 
         struct SendBundle {
@@ -573,13 +571,11 @@ impl WkWebViewProducer {
                 if v.is_empty() { None } else { Some(v) }
             };
             if let Ok(mut state) = nav_state.lock() {
-                state
-                    .events
-                    .push_back(crate::NavigationEvent::DownloadCancelled {
-                        id,
-                        destination_path: destination_path.clone(),
-                        resume_data: resume_bytes,
-                    });
+                state.push_navigation_event(crate::NavigationEvent::DownloadCancelled {
+                    id,
+                    destination_path: destination_path.clone(),
+                    resume_data: resume_bytes,
+                });
             }
         });
         unsafe { download.cancel(Some(&block)) };

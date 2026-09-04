@@ -475,6 +475,8 @@ impl WebView2CompositionProducer {
         let nav_event_queue: Arc<Mutex<VecDeque<NavigationEvent>>> =
             Arc::new(Mutex::new(VecDeque::new()));
         let web_message_queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let web_surface_event_queue: Arc<Mutex<VecDeque<WebSurfaceEvent>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
         let cursor_queue: Arc<Mutex<VecDeque<CursorShape>>> = Arc::new(Mutex::new(VecDeque::new()));
         let pending_cookies = Arc::new(Mutex::new(None));
         let pending_find = Arc::new(Mutex::new(None));
@@ -506,6 +508,7 @@ impl WebView2CompositionProducer {
             &webview,
             nav_event_queue.clone(),
             web_message_queue.clone(),
+            web_surface_event_queue.clone(),
             cookie_change_handler.clone(),
         )?;
         let context_menu_requested_token = browser::register_context_menu_requested_handler(
@@ -563,6 +566,7 @@ impl WebView2CompositionProducer {
             capture_stale_frames_dropped: AtomicU64::new(0),
             nav_event_queue,
             web_message_queue,
+            web_surface_event_queue,
             cursor_queue,
             pending_cookies,
             pending_find,
