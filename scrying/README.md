@@ -11,6 +11,17 @@ features. Pick the row matching the host, with default features disabled for
 28 or 29. `scrying::wgpu` re-exports the selected version so public device and
 texture types cannot silently come from a different major.
 
+## Rust support and CI
+
+The published library supports Rust 1.92 and has an exact 1.92.0 compile gate
+on Windows, macOS, and Linux for each wgpu 28/29/30 public API row. Linux's
+native-engine families are checked independently: WebKitGTK 4.1 fallback,
+WPE, and WebKitGTK 6.0 each build in their own system-library environment.
+They are deliberately not combined through `--all-features`, since WebKitGTK
+6.0 selects an incompatible GTK/glib dependency family. This is a
+library-only compatibility promise; the headed hardware workflows remain on
+their Rust 1.97.1 lane.
+
 ## Current slice
 
 The shared contract:

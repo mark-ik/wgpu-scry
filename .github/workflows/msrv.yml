@@ -1,0 +1,128 @@
+name: scrying MSRV
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scrying/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/msrv.yml"
+  pull_request:
+    paths:
+      - "scrying/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/msrv.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scrying-msrv-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+# This is the publishable `scrying` crate's MSRV gate. The demo workspace and
+# headed hardware workflows intentionally retain their Rust 1.97.1 lane.
+jobs:
+  platform-api:
+    name: Rust 1.92 / ${{ matrix.name }} / ${{ matrix.wgpu }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            wgpu: wgpu-28
+          - name: Windows
+            os: windows-latest
+            wgpu: wgpu-29
+          - name: Windows
+            os: windows-latest
+            wgpu: wgpu-30
+          - name: macOS
+            os: macos-latest
+            wgpu: wgpu-28
+          - name: macOS
+            os: macos-latest
+            wgpu: wgpu-29
+          - name: macOS
+            os: macos-latest
+            wgpu: wgpu-30
+          # This is the Linux public API without an installed native engine.
+          # Each engine feature is compiled in its own native-family job below.
+          - name: Linux shell
+            os: ubuntu-latest
+            wgpu: wgpu-28
+          - name: Linux shell
+            os: ubuntu-latest
+            wgpu: wgpu-29
+          - name: Linux shell
+            os: ubuntu-latest
+            wgpu: wgpu-30
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - name: Check the publishable library row
+        run: >-
+          cargo check --locked -p scrying --lib --no-default-features
+          --features ${{ matrix.wgpu }}
+
+  linux-webkitgtk-fallback:
+    name: Rust 1.92 / Linux / WebKitGTK 4.1 fallback
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - name: Install WebKitGTK 4.1 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev
+      - name: Check the fallback producer family
+        run: >-
+          cargo check --locked -p scrying --lib --no-default-features
+          --features wgpu-30,webkitgtk-fallback
+
+  linux-wpe:
+    name: Rust 1.92 / Linux / WPE
+    runs-on: ubuntu-latest
+    container: fedora:44
+
+    steps:
+      - name: Install WPE build dependencies
+        run: |
+          dnf install -y dnf-plugins-core git curl gcc gcc-c++ \
+            pkgconf-pkg-config mesa-libgbm-devel libdrm-devel \
+            vulkan-loader-devel
+          dnf copr enable -y philn/wpewebkit
+          dnf install -y wpewebkit-devel libwpe-devel wpebackend-fdo-devel
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - name: Check the WPE producer family
+        run: >-
+          cargo check --locked -p scrying --lib --no-default-features
+          --features wgpu-30,wpe
+
+  linux-webkit6:
+    name: Rust 1.92 / Linux / WebKitGTK 6.0
+    runs-on: ubuntu-latest
+    container: fedora:44
+
+    steps:
+      - name: Install WebKitGTK 6.0 build dependencies
+        run: >-
+          dnf install -y git curl gcc gcc-c++ pkgconf-pkg-config
+          gtk4-devel webkitgtk6.0-devel
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - name: Check the WebKitGTK 6.0 producer family
+        run: >-
+          cargo check --locked -p scrying --lib --no-default-features
+          --features wgpu-30,webkit6
