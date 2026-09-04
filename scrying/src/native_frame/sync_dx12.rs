@@ -41,6 +41,7 @@ use crate::native_frame::{
 
 /// Synchronizer that uses a shared D3D12 fence to gate consumer submits on
 /// producer rendering completion.
+#[derive(Debug)]
 pub struct Dx12FenceSynchronizer {
     fence: ID3D12Fence,
     queue: ID3D12CommandQueue,

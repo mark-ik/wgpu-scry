@@ -369,6 +369,12 @@ pub struct DmaBufImage {
     semaphore: Option<std::os::fd::OwnedFd>,
 }
 
+impl DmaBufImage {
+    pub fn planes(&self) -> &[DmaBufPlane] {
+        &self.planes
+    }
+}
+
 #[cfg(target_os = "linux")]
 impl DmaBufImage {
     /// Build a frame from an owned descriptor table and copyable plane
@@ -473,10 +479,6 @@ impl DmaBufImage {
             producer_sync,
             semaphore,
         )
-    }
-
-    pub fn planes(&self) -> &[DmaBufPlane] {
-        &self.planes
     }
 
     pub fn buffer_count(&self) -> usize {
