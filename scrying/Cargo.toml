@@ -55,7 +55,7 @@ image = "0.25"
 # in the gamut conversions; no rendering-extras features.
 palette = { version = "0.7", default-features = false, features = ["std"] }
 thiserror = "2.0.17"
-grafting = { version = "0.6.0", git = "https://github.com/merely-made/wgpu-graft.git", rev = "d671c9681332751f8ea24dd974511b81fe6a05dd", default-features = false }
+grafting = { version = "0.6.0", default-features = false }
 wgpu_30 = { package = "wgpu", version = "30.0.1", features = ["metal"], optional = true }
 wgpu_hal_30 = { package = "wgpu-hal", version = "30.0.1", optional = true }
 wgpu_29 = { package = "wgpu", version = "29.0.1", features = ["metal"], optional = true }
