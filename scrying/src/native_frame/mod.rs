@@ -377,7 +377,7 @@ impl DmaBufImage {
         let mut owned_raw = Vec::new();
         for plane in &planes {
             if plane.fd < 0 {
-                close_raw_descriptors(&planes, semaphore_fd);
+                Self::close_raw_descriptors(&planes, semaphore_fd);
                 return Err(InteropError::InvalidFrame(
                     "DMABUF plane descriptor must be non-negative",
                 ));
@@ -388,13 +388,13 @@ impl DmaBufImage {
         }
         if let Some(fd) = semaphore_fd {
             if fd < 0 {
-                close_raw_descriptors(&planes, semaphore_fd);
+                Self::close_raw_descriptors(&planes, semaphore_fd);
                 return Err(InteropError::InvalidFrame(
                     "semaphore descriptor must be non-negative",
                 ));
             }
             if owned_raw.contains(&fd) {
-                close_raw_descriptors(&planes, semaphore_fd);
+                Self::close_raw_descriptors(&planes, semaphore_fd);
                 return Err(InteropError::InvalidFrame(
                     "semaphore descriptor aliases a DMABUF plane descriptor",
                 ));

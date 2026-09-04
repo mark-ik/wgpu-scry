@@ -594,10 +594,7 @@ impl WkWebViewProducer {
         // consumer-side-only change.
         cmd_buf.waitUntilCompleted();
 
-        let frame_texture = unsafe { Retained::retain(Retained::as_ptr(&dest_texture)) }
-            .ok_or_else(|| {
-                WebSurfaceError::Platform("failed to retain captured MTLTexture".into())
-            })?;
+        let frame_texture = dest_texture.clone();
         let frame = NativeMetalTextureRef::from_retained(
             PhysicalSize::new(crop_w as u32, crop_h as u32),
             super::wgpu_format_for(self.config.color_pipeline),
