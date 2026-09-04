@@ -14,6 +14,7 @@ pub(crate) fn validate_platform_profile_store(
     mut producer: scrying::PlatformWebSurfaceProducer,
     parent_hwnd: *mut std::ffi::c_void,
     user_data_dir: std::path::PathBuf,
+    fence_synchronizer: &Arc<scrying::Dx12FenceSynchronizer>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cookie_name = format!("demo_win_profile_cookie_{}", std::process::id());
     let cookie = Cookie {
@@ -46,7 +47,8 @@ pub(crate) fn validate_platform_profile_store(
         user_data_dir,
     )
     .with_offset(SMOKE_PROBE_X + SMOKE_PROBE_WIDTH + 24.0, SMOKE_PROBE_Y)
-    .with_diagnostic_backdrop((67, 61, 89));
+    .with_diagnostic_backdrop((67, 61, 89))
+    .with_dx12_fence_synchronizer(Arc::clone(fence_synchronizer));
     let mut secondary =
         unsafe { scrying::PlatformWebSurfaceProducer::new(parent_hwnd, secondary_config)? };
     secondary.navigate_to_string(
@@ -83,6 +85,7 @@ pub(crate) fn validate_platform_incognito_store(
     mut incognito: scrying::PlatformWebSurfaceProducer,
     parent_hwnd: *mut std::ffi::c_void,
     user_data_dir: std::path::PathBuf,
+    fence_synchronizer: &Arc<scrying::Dx12FenceSynchronizer>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cookie_name = format!("demo_win_incognito_cookie_{}", std::process::id());
     let cookie = Cookie {
@@ -115,7 +118,8 @@ pub(crate) fn validate_platform_incognito_store(
         user_data_dir,
     )
     .with_offset(SMOKE_PROBE_X + SMOKE_PROBE_WIDTH + 24.0, SMOKE_PROBE_Y)
-    .with_diagnostic_backdrop((59, 92, 72));
+    .with_diagnostic_backdrop((59, 92, 72))
+    .with_dx12_fence_synchronizer(Arc::clone(fence_synchronizer));
     let mut persistent =
         unsafe { scrying::PlatformWebSurfaceProducer::new(parent_hwnd, persistent_config)? };
     persistent.navigate_to_string(

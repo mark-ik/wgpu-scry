@@ -72,12 +72,13 @@ fn wpe_to_vulkan_round_trip() {
     };
 
     // --- 2. Navigate to inline HTML; verify load completion event ---
-    if let Err(e) = producer.navigate_to_string(
+    const CONTENT: &str =
         "<!doctype html><html style='width:100%;height:100%;background:#1e90ff'>\
          <body style='width:100%;height:100%;margin:0;background:#1e90ff'>\
-         <div style='position:fixed;inset:0;background:#1e90ff'></div></body></html>",
-        std::time::Duration::from_secs(5),
-    ) {
+         <div style='position:fixed;inset:0;background:#1e90ff'></div></body></html>";
+    if let Err(e) =
+        producer.navigate_to_string(CONTENT, std::time::Duration::from_secs(5))
+    {
         eprintln!("SKIP: navigate_to_string failed: {e}");
         return;
     }
@@ -98,8 +99,8 @@ fn wpe_to_vulkan_round_trip() {
     // callback and can let that stale frame satisfy the content acquisition.
     let _first_frame = acquire_dmabuf_frame(&mut producer, "first navigation");
     producer
-        .resize(PhysicalSize::new(256, 256))
-        .expect("request a post-startup content repaint");
+        .navigate_to_string(CONTENT, std::time::Duration::from_secs(5))
+        .expect("request a post-startup content repaint by navigating again");
 
     // --- 3. Acquire one DMABUF frame ---
     //

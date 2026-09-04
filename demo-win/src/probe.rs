@@ -497,6 +497,7 @@ pub(crate) fn hwnd_from_window(
 pub(crate) fn validate_platform_multi_view(
     event_loop: &ActiveEventLoop,
     primary_window: &Window,
+    fence_synchronizer: &Arc<scrying::Dx12FenceSynchronizer>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use windows::Win32::System::WinRT::{
         CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
@@ -523,13 +524,15 @@ pub(crate) fn validate_platform_multi_view(
         std::env::temp_dir().join("demo-win-multi-view-primary"),
     )
     .with_offset(24.0, 24.0)
-    .with_diagnostic_backdrop((50, 70, 92));
+    .with_diagnostic_backdrop((50, 70, 92))
+    .with_dx12_fence_synchronizer(Arc::clone(fence_synchronizer));
     let secondary_config = scrying::PlatformWebSurfaceConfig::new(
         winit::dpi::PhysicalSize::new(360, 260),
         std::env::temp_dir().join("demo-win-multi-view-secondary"),
     )
     .with_offset(24.0, 24.0)
-    .with_diagnostic_backdrop((80, 64, 72));
+    .with_diagnostic_backdrop((80, 64, 72))
+    .with_dx12_fence_synchronizer(Arc::clone(fence_synchronizer));
 
     let primary_hwnd = hwnd_from_window(primary_window)?;
     let secondary_hwnd = hwnd_from_window(&secondary_window)?;
@@ -731,11 +734,21 @@ pub(crate) fn run_platform_composition_visual_probe(
         return Ok(None);
     }
     if cli.profile_test {
-        validate_platform_profile_store(producer, parent_hwnd, user_data_dir)?;
+        validate_platform_profile_store(
+            producer,
+            parent_hwnd,
+            user_data_dir,
+            fence_synchronizer,
+        )?;
         return Ok(None);
     }
     if cli.incognito_test {
-        validate_platform_incognito_store(producer, parent_hwnd, user_data_dir)?;
+        validate_platform_incognito_store(
+            producer,
+            parent_hwnd,
+            user_data_dir,
+            fence_synchronizer,
+        )?;
         return Ok(None);
     }
     let imported = if std::env::var("WEBVIEW_READBACK_VALIDATE")

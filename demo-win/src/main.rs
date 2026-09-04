@@ -545,7 +545,7 @@ impl AppState {
         let captured = if cli.multi_pane_input_test {
             None
         } else if cli.multi_view_test {
-            validate_platform_multi_view(event_loop, &window)?;
+            validate_platform_multi_view(event_loop, &window, &fence_synchronizer)?;
             None
         } else if cli.composition_focus_hwnd_test {
             validate_platform_composition_focus_hwnd(&window, &host)?;
