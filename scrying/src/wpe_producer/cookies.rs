@@ -90,7 +90,9 @@ impl<T> CookieOperation<T> {
     }
 
     fn manager(&self) -> *mut ffi::WebKitCookieManager {
-        self.manager.to_glib_none().0.cast()
+        ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.manager)
+            .0
+            .cast()
     }
 
     fn cancellable(&self) -> *mut std::ffi::c_void {
