@@ -66,7 +66,6 @@ fn input_dispatch_does_not_crash() {
         WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img)) => img.size,
         _ => panic!("expected DMABUF frame"),
     };
-    close_frame_fds_if_dmabuf(&first);
     eprintln!(
         "input smoke: first frame {}x{}",
         first_size.width, first_size.height
@@ -238,7 +237,6 @@ fn input_dispatch_does_not_crash() {
                 "input smoke: post-input frame {}x{}",
                 img.size.width, img.size.height
             );
-            close_frame_fds_if_dmabuf(second.as_ref().unwrap());
         }
         Some(_) => panic!("expected DMABUF frame post-input"),
         None => eprintln!(
@@ -309,21 +307,6 @@ fn acquire_with_pump_or_skip(producer: &mut WpeProducer) -> Option<WebSurfaceFra
                 continue;
             }
             Err(_) => return None,
-        }
-    }
-}
-
-fn close_frame_fds_if_dmabuf(frame: &WebSurfaceFrame) {
-    if let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img)) = frame {
-        for plane in &img.planes {
-            unsafe {
-                libc::close(plane.fd);
-            }
-        }
-        if let Some(fd) = img.semaphore_fd {
-            unsafe {
-                libc::close(fd);
-            }
         }
     }
 }

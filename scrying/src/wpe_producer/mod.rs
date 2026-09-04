@@ -43,10 +43,9 @@ pub use config::WpeProducerConfig;
 pub use producer::WpeProducer;
 
 use crate::native_frame::{CapabilityStatus, NativeFrameKind, UnsupportedReason};
-use crate::{
-    CookieCapabilities, ScriptCapabilities, SystemWebviewBackend,
-    WebSurfaceCapabilities, WebSurfaceFeatureCapabilities, WebSurfaceMode,
-};
+use crate::{SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceFeatureCapabilities, WebSurfaceMode};
+#[cfg(feature = "wpe")]
+use crate::{CookieCapabilities, ScriptCapabilities};
 
 pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
     if cfg!(feature = "wpe") {

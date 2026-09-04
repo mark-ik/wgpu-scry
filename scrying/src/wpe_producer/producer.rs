@@ -91,8 +91,8 @@ pub struct WpeProducer {
 ///
 /// Cloned into the `buffer-rendered` glib closure so the callback (which holds
 /// no `&mut WpeProducer`) can publish frames and advance the shared generation.
-/// `submit` closes the fds of any frame it evicts so a consumer that falls
-/// behind the producer can't leak the dup'd plane descriptors.
+/// `submit` drops any frame it evicts so a consumer that falls behind the
+/// producer cannot leak its owned descriptors.
 #[derive(Clone)]
 pub(super) struct FrameSink {
     pub pending: Arc<Mutex<Option<DmaBufImage>>>,
@@ -104,36 +104,14 @@ pub(super) struct FrameSink {
 }
 
 impl FrameSink {
-    /// Store a new frame; close the fds of any evicted stale frame first.
+    /// Store a new frame; dropping an evicted stale frame closes its custody.
     pub fn submit(&self, frame: DmaBufImage) {
         let mut slot = match self.pending.lock() {
             Ok(s) => s,
             Err(p) => p.into_inner(),
         };
-        if let Some(old) = slot.take() {
-            close_frame_fds(&old);
-        }
+        let _evicted = slot.take();
         *slot = Some(frame);
-    }
-}
-
-/// Close the dup'd fds a producer owns for a frame not handed to the importer.
-///
-/// A `DmaBufImage` has no `Drop` (its fds are managed by contract — ownership
-/// transfers to the Vulkan importer once handed off). This closes the plane and
-/// semaphore fds for frames the producer evicts before the consumer takes them.
-pub(super) fn close_frame_fds(frame: &DmaBufImage) {
-    for plane in &frame.planes {
-        // SAFETY: producer-owned dup'd fd not yet transferred to the Vulkan importer.
-        unsafe {
-            libc::close(plane.fd);
-        }
-    }
-    if let Some(fd) = frame.semaphore_fd {
-        // SAFETY: producer-owned dup'd semaphore fd, likewise not yet transferred.
-        unsafe {
-            libc::close(fd);
-        }
     }
 }
 
@@ -284,8 +262,8 @@ impl WpeProducer {
         } else {
             SyncMechanism::None
         };
-        // Route through the shared sink so a stale evicted frame's dup'd fds are
-        // closed (same path the `buffer-rendered` closure uses).
+        // Route through the shared sink; stale frames are dropped and close
+        // their descriptors through DmaBufImage's ownership.
         self.frame_sink().submit(frame);
         Ok(())
     }
@@ -405,23 +383,9 @@ impl WpeProducer {
 
 impl Drop for WpeProducer {
     fn drop(&mut self) {
-        // Close fds on any frame that was queued but never handed to the
-        // importer. Mutex poisoning -> still take and close (best effort).
-        //
-        // Drop order is load-bearing: `pending_frame` is declared above
-        // `handles` in `WpeProducer`, so Rust drops it (and any frame fds
-        // we just took) BEFORE `handles.webview`'s field-Drop tears the
-        // WebView down and disconnects the buffer-rendered closure. Don't
-        // reorder those struct fields without revisiting this.
-        let slot = match self.pending_frame.lock() {
-            Ok(mut s) => s.take(),
-            Err(p) => p.into_inner().take(),
-        };
-        if let Some(frame) = slot {
-            close_frame_fds(&frame);
-        }
-        // GObject handles (under feature = "wpe") drop via their own field
-        // Drops — webview unref propagates to display + network-session.
+        // `DmaBufImage` owns every descriptor in a queued frame, so normal
+        // field drop closes it after the callback-owned WPE handles are torn
+        // down. Keep the pending-frame field before handles for that order.
     }
 }
 
@@ -775,19 +739,22 @@ mod fd_tests {
     }
 
     fn frame_with_fd(fd: i32) -> DmaBufImage {
-        DmaBufImage {
-            size: dpi::PhysicalSize::new(4, 4),
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            drm_format: 0,
-            drm_modifier: 0,
-            planes: vec![DmaBufPlane {
-                fd,
-                offset: 0,
-                stride: 16,
-            }],
-            generation: 0,
-            producer_sync: SyncMechanism::None,
-            semaphore_fd: None,
+        unsafe {
+            DmaBufImage::from_raw_owned_parts(
+                dpi::PhysicalSize::new(4, 4),
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+                0,
+                0,
+                vec![DmaBufPlane {
+                    fd,
+                    offset: 0,
+                    stride: 16,
+                }],
+                0,
+                SyncMechanism::None,
+                None,
+            )
+            .expect("test fd must be owned")
         }
     }
 

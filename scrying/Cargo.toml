@@ -1,6 +1,6 @@
 [package]
 name = "scrying"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/merely-made/wgpu-scry"
@@ -54,7 +54,7 @@ image = "0.25"
 # in the gamut conversions; no rendering-extras features.
 palette = { version = "0.7", default-features = false, features = ["std"] }
 thiserror = "2.0.17"
-grafting = { version = "0.6.0", git = "https://github.com/merely-made/wgpu-graft.git", rev = "59cd8a3ec017aca46b0756d2ec90fd0a62550ef4", default-features = false }
+grafting = { version = "0.6.0", git = "https://github.com/merely-made/wgpu-graft.git", rev = "a9c6ee856f784361b9e6134adb694461b3aadf3c", default-features = false }
 wgpu_30 = { package = "wgpu", version = "30.0.1", features = ["metal"], optional = true }
 wgpu_hal_30 = { package = "wgpu-hal", version = "30.0.1", optional = true }
 wgpu_29 = { package = "wgpu", version = "29.0.1", features = ["metal"], optional = true }

@@ -163,20 +163,13 @@ fn capture_composition_pane(
     producer: &mut scrying::PlatformWebSurfaceProducer,
     host: &HostWgpuContext,
 ) -> Result<CaptureSample, Box<dyn std::error::Error>> {
-    use scrying::windows_capture::close_shared_handle;
-
     let started = std::time::Instant::now();
     let captured = producer.acquire_full_frame()?;
-    let WebSurfaceFrame::Native(ref native_frame) = captured.frame else {
+    let WebSurfaceFrame::Native(native_frame) = captured.frame else {
         return Err("composition focus-HWND capture did not produce a native frame".into());
     };
     let importer = WgpuTextureImporter::new(host.clone());
     let imported = importer.import_frame(native_frame, &ImportOptions::default())?;
-    unsafe {
-        if !captured.shared_handle.is_null() {
-            close_shared_handle(captured.shared_handle)?;
-        }
-    }
     Ok(CaptureSample {
         elapsed: started.elapsed(),
         width: imported.size.width,

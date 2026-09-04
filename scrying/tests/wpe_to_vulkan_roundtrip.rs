@@ -95,8 +95,7 @@ fn wpe_to_vulkan_round_trip() {
     // Wait for and consume WPE's transparent startup frame. Merely draining
     // the producer's current slot races the delayed `buffer-rendered`
     // callback and can let that stale frame satisfy the content acquisition.
-    let first_frame = acquire_dmabuf_frame(&mut producer, "first navigation");
-    close_producer_fds(&first_frame);
+    let _first_frame = acquire_dmabuf_frame(&mut producer, "first navigation");
     producer
         .resize(PhysicalSize::new(256, 256))
         .expect("request a post-startup content repaint");
@@ -168,7 +167,6 @@ fn wpe_to_vulkan_round_trip() {
             // SKIP message already printed inside make_vulkan_host.
             // Producer fds must still be closed — the importer never
             // takes ownership on this path.
-            close_producer_fds(&image);
             return;
         }
     };
@@ -196,7 +194,7 @@ fn wpe_to_vulkan_round_trip() {
     let expected_size = image.size;
     let expected_format = image.format;
     let imported =
-        match importer.import_frame(&NativeFrame::DmaBufImage(image), &ImportOptions::default()) {
+        match importer.import_frame(NativeFrame::DmaBufImage(image), &ImportOptions::default()) {
             Ok(t) => t,
             Err(e) => {
                 panic!(
@@ -510,25 +508,6 @@ fn sample_imported_texture(
     }
     queue.submit(std::iter::once(encoder.finish()));
     target
-}
-
-/// Close producer-owned dup'd fds on a `DmaBufImage` that was never
-/// handed to the importer. Used only on the SKIP branch where the
-/// wgpu host couldn't be built — on the import path, `import_frame`
-/// takes ownership of the fds and Vulkan closes them on the imported
-/// texture's drop.
-fn close_producer_fds(image: &DmaBufImage) {
-    for plane in &image.planes {
-        // SAFETY: producer-owned dup'd fd not yet transferred to the importer.
-        unsafe {
-            libc::close(plane.fd);
-        }
-    }
-    if let Some(fd) = image.semaphore_fd {
-        unsafe {
-            libc::close(fd);
-        }
-    }
 }
 
 fn make_vulkan_host() -> Option<(wgpu::Device, wgpu::Queue, HostWgpuContext)> {

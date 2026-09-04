@@ -440,21 +440,18 @@ fn import_parent_capture(
     parent_hwnd: HWND,
     host: &HostWgpuContext,
 ) -> Result<CaptureImportSample, Box<dyn std::error::Error>> {
-    use scrying::windows_capture::{
-        DxgiSharedHandleBridge, capture_window_frame_once, close_shared_handle,
-    };
+    use scrying::windows_capture::{DxgiSharedHandleBridge, capture_window_frame_once};
 
     let started = std::time::Instant::now();
     let captured = unsafe {
         capture_window_frame_once(parent_hwnd.0 as *mut _, std::time::Duration::from_secs(3))
     }?;
-    let captured_handle = captured.shared_frame.shared_handle;
     let dx12 = DxgiSharedHandleBridge.bridge_shared_handle(captured.shared_frame)?;
     let WebSurfaceFrame::Native(native_frame) = dx12.into_surface_frame() else {
         return Err("window-to-visual capture bridge did not produce a native frame".into());
     };
     let importer = WgpuTextureImporter::new(host.clone());
-    let imported = importer.import_frame(&native_frame, &ImportOptions::default())?;
+    let imported = importer.import_frame(native_frame, &ImportOptions::default())?;
     println!(
         "demo-win: window-to-visual: captured {}x{}, imported {:?} {}x{} generation {}",
         captured.content_size.width,
@@ -464,9 +461,6 @@ fn import_parent_capture(
         imported.size.height,
         imported.generation
     );
-    unsafe {
-        close_shared_handle(captured_handle)?;
-    }
     Ok(CaptureImportSample {
         elapsed: started.elapsed(),
         imported_width: imported.size.width,

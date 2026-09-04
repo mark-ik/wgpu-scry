@@ -12,8 +12,8 @@ Extracted from
 ## Status (2026-08-31)
 
 `scrying` 0.6.0 is published on crates.io and working across all five
-backends; `main` is the 0.7.0 compatibility revision, where borrowed Metal
-frame descriptors are move-only. It carries feature-selected wgpu 28/29/30,
+backends; `main` is the 0.8.0 compatibility revision, where native frame
+resources have move-only, RAII custody. It carries feature-selected wgpu 28/29/30,
 defaults to wgpu 30, and requires at least wgpu 30.0.1 on that row.
 
 - Frame transports are proven per platform: Windows WebView2 capture into a
@@ -26,7 +26,7 @@ defaults to wgpu 30, and requires at least wgpu 30.0.1 on that row.
   popups, find, and PDF. Per-backend state and caveats live in
   [`docs/parity-matrix.md`](docs/parity-matrix.md).
 - DX12, Metal, and Vulkan/DMABUF imports delegate to the sibling `grafting`
-  crate at immutable revision `59cd8a3`; Scry keeps webview and sync policy.
+  crate at immutable revision `a9c6ee8`; Scry keeps webview and sync policy.
 - CI runs the macOS suite, the WebKitGTK 4.1 Linux suite, and a required Fedora
   44 WPE producer/demo build on every push.
 
@@ -42,10 +42,10 @@ For wgpu hosts that want a system webview rendered inside their own pipeline:
 
 ```toml
 [dependencies]
-scrying = "0.6"
+scrying = "0.8"
 
 # Hosts on an adjacent wgpu major select it explicitly.
-scrying = { version = "0.6", default-features = false, features = ["wgpu-29"] }
+scrying = { version = "0.8", default-features = false, features = ["wgpu-29"] }
 ```
 
 The default wgpu row is 30. `wgpu-28`, `wgpu-29`, and `wgpu-30` are carried;

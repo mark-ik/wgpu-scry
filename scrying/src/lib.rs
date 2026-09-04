@@ -508,6 +508,7 @@ fn webview2_features(imported_texture: &CapabilityStatus) -> WebSurfaceFeatureCa
     }
 }
 
+#[cfg(target_os = "windows")]
 pub(crate) fn webview2_features_for_producer() -> WebSurfaceFeatureCapabilities {
     webview2_features(&CapabilityStatus::Supported)
 }

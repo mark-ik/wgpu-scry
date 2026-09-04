@@ -252,8 +252,6 @@ impl WebViewRenderer {
     }
 
     fn refresh_captured_texture(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        use scrying::windows_capture::close_shared_handle;
-
         if force_reimport_every_frame() {
             self.captured.producer.invalidate_persistent_dest();
         }
@@ -286,15 +284,12 @@ impl WebViewRenderer {
         self.consecutive_empty_polls = 0;
 
         if new_frame.resource_is_new {
-            let WebSurfaceFrame::Native(ref native_frame) = new_frame.frame else {
+            let WebSurfaceFrame::Native(native_frame) = new_frame.frame else {
                 return Err("WebView2 producer did not emit a native frame".into());
             };
             let imported = self
                 .importer
                 .import_frame(native_frame, &ImportOptions::default())?;
-            unsafe {
-                close_shared_handle(new_frame.shared_handle)?;
-            }
 
             self.bind_group = build_bind_group(
                 &self.device,

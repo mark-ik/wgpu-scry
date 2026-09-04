@@ -237,10 +237,6 @@ unsafe fn dmabuf_to_image(
         // dup so the importer can own its copy independently of WPE's pool.
         let fd = unsafe { libc::dup(raw_fd) };
         if fd < 0 {
-            // Close any fds dup'd so far, then bail.
-            for p in &planes {
-                unsafe { libc::close(p.fd) };
-            }
             return None;
         }
         planes.push(DmaBufPlane {
@@ -249,18 +245,23 @@ unsafe fn dmabuf_to_image(
             stride: unsafe { ffi::wpe_buffer_dma_buf_get_stride(dmabuf, i) },
         });
     }
-    Some(DmaBufImage {
-        size: dpi::PhysicalSize::new(width as u32, height as u32),
-        // WPE's default headless buffer is BGRA; corrected against the observed
-        // fourcc in Task 6 if the runtime smoke shows otherwise.
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        drm_format: unsafe { ffi::wpe_buffer_dma_buf_get_format(dmabuf) },
-        drm_modifier: unsafe { ffi::wpe_buffer_dma_buf_get_modifier(dmabuf) },
-        planes,
-        generation: 0, // assigned on submit
-        producer_sync: SyncMechanism::None,
-        semaphore_fd: None,
-    })
+    // SAFETY: each plane fd is a successful dup owned exclusively by this
+    // frame constructor. `DmaBufImage` closes them on every later path.
+    unsafe {
+        DmaBufImage::from_raw_owned_parts(
+            dpi::PhysicalSize::new(width as u32, height as u32),
+            // WPE's default headless buffer is BGRA; corrected against the observed
+            // fourcc in Task 6 if the runtime smoke shows otherwise.
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            ffi::wpe_buffer_dma_buf_get_format(dmabuf),
+            ffi::wpe_buffer_dma_buf_get_modifier(dmabuf),
+            planes,
+            0, // assigned on submit
+            SyncMechanism::None,
+            None,
+        )
+    }
+    .ok()
 }
 
 /// Connect the `WPEView::buffer-rendered` frame seam.
@@ -384,7 +385,6 @@ mod tests {
             "smoke#1 (post-nav): {}x{} fourcc=0x{:08x} mod=0x{:016x} planes={}",
             img1.size.width, img1.size.height, img1.drm_format, img1.drm_modifier, img1.planes.len()
         );
-        super::super::producer::close_frame_fds(&img1);
 
         // --- 2. Resize + assert next frame ---
         producer
@@ -424,6 +424,5 @@ mod tests {
         // Soft assertion: the headless toplevel may coerce dimensions. The
         // diagnostic eprintln makes the actual size visible. Hard contract:
         // resize succeeded AND the seam still produces a valid frame.
-        super::super::producer::close_frame_fds(&img2);
     }
 }

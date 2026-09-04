@@ -322,6 +322,7 @@ impl WebView2CompositionProducer {
             format: wgpu::TextureFormat::Bgra8Unorm,
             generation: self.resource_epoch,
             shared_handle,
+            resource: dest.texture.shared_frame.resource.clone(),
             producer_sync: self.capture_factory.sync_mechanism(),
             fence_value,
         }

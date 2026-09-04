@@ -261,7 +261,7 @@ impl WebView2CompositionConfig {
 /// When `resource_is_new` is `true`, this frame points at a freshly allocated
 /// shared D3D11 texture that the consumer must (re-)import; the consumer owns
 /// the NT handle and is responsible for calling
-/// `crate::windows_capture::close_shared_handle` after import.
+/// The returned frame owns the exported handle through its RAII custody token.
 ///
 /// When `resource_is_new` is `false`, the producer reused the previous
 /// allocation: the consumer should keep its previously-imported `wgpu::Texture`

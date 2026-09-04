@@ -594,11 +594,14 @@ impl WkWebViewProducer {
         // consumer-side-only change.
         cmd_buf.waitUntilCompleted();
 
-        let raw_metal_texture = Retained::as_ptr(&dest_texture) as *mut std::ffi::c_void;
-        let frame = NativeMetalTextureRef {
-            size: PhysicalSize::new(crop_w as u32, crop_h as u32),
-            format: super::wgpu_format_for(self.config.color_pipeline),
-            generation: capture.generation.fetch_add(1, Ordering::Relaxed),
+        let frame_texture = unsafe { Retained::retain(Retained::as_ptr(&dest_texture)) }
+            .ok_or_else(|| {
+                WebSurfaceError::Platform("failed to retain captured MTLTexture".into())
+            })?;
+        let frame = NativeMetalTextureRef::from_retained(
+            PhysicalSize::new(crop_w as u32, crop_h as u32),
+            super::wgpu_format_for(self.config.color_pipeline),
+            capture.generation.fetch_add(1, Ordering::Relaxed),
             // The producer encodes an `MTLSharedEvent` signal at
             // `signal_value` after each frame's blit; consumers
             // that need explicit sync wait on
@@ -608,10 +611,10 @@ impl WkWebViewProducer {
             // — the explicit signal is opt-in surface for
             // consumers who want to interleave their own Metal
             // queue with the producer's blit.
-            producer_sync: SyncMechanism::ExplicitMetalEvent,
-            raw_metal_texture,
+            SyncMechanism::ExplicitMetalEvent,
             signal_value,
-        };
+            frame_texture,
+        );
 
         // Keep the destination texture alive past this function.
         // The consumer's importer

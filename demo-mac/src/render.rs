@@ -358,7 +358,7 @@ impl WgpuRender {
                 let native = NativeFrame::MetalTextureRef(frame);
                 match self
                     .importer
-                    .import_frame(&native, &ImportOptions::default())
+                    .import_frame(native, &ImportOptions::default())
                 {
                     Ok(imported) => Some(imported),
                     Err(e) => {

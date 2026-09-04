@@ -71,7 +71,7 @@ pub(crate) fn linux_webkit6_capabilities() -> WebSurfaceCapabilities {
         ),
         cpu_snapshot: CapabilityStatus::Supported,
         supported_frames: Vec::new(),
-        reason: "WebKitGTK 6.0 / GTK 4 producer (Phase 5 first slice): hidden gtk4::Window hosting the WebKitWebView, CpuRgba snapshots via webkit_web_view_get_snapshot → gdk::Texture::download. Input forwarding / cookies / scheme handlers / etc. are follow-on slices.",
+        reason: "WebKitGTK 6.0 / GTK 4 producer: hidden gtk4::Window hosting the WebKitWebView, CpuRgba snapshots via webkit_web_view_get_snapshot → gdk::Texture::download, with input, cookie, download, and scheme-handler bridges wired; the capability matrix reports remaining degradations explicitly.",
         features: gtk6_features(),
     }
 }

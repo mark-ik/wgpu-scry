@@ -169,9 +169,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // 5. Print plane metadata, then close every fd this frame owns.
-    //    `DmaBufImage` has no `Drop`; fd ownership transfers with the
-    //    frame and the consumer (us) is responsible for releasing them.
+    // 5. Print plane metadata. `DmaBufImage` owns its descriptors and closes
+    // them when this frame leaves scope.
     match &frame {
         WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img)) => {
             println!(
@@ -195,20 +194,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             if args.snapshot_test {
                 if img.size.width == 0 || img.size.height == 0 {
-                    close_frame_fds_if_dmabuf(&frame);
                     return Err("FAIL: zero-sized DMABUF frame".into());
                 }
                 if img.planes.is_empty() {
-                    close_frame_fds_if_dmabuf(&frame);
                     return Err("FAIL: DMABUF frame had no planes".into());
                 }
                 println!("PASS: DMABUF frame is non-empty");
             }
         }
         other => {
-            // Don't leak fds even on the unexpected-variant path,
-            // though by construction WpeProducer only emits DmaBufImage.
-            close_frame_fds_if_dmabuf(&frame);
             return Err(format!(
                 "FAIL: expected DmaBufImage frame, got mode {:?}",
                 other.mode()
@@ -216,7 +210,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
     }
-    close_frame_fds_if_dmabuf(&frame);
     Ok(())
 }
 
@@ -240,29 +233,6 @@ fn acquire_with_pump(
                 continue;
             }
             Err(e) => return Err(format!("acquire_frame timed out: {e}")),
-        }
-    }
-}
-
-/// Close every plane fd (and the optional producer-sync semaphore fd)
-/// owned by a DMABUF frame. Mirrors the `close_frame_fds_if_dmabuf`
-/// helper in `scrying/tests/wpe_input.rs`.
-fn close_frame_fds_if_dmabuf(frame: &WebSurfaceFrame) {
-    if let WebSurfaceFrame::Native(NativeFrame::DmaBufImage(img)) = frame {
-        for plane in &img.planes {
-            // SAFETY: producer-transferred DMABUF fd, not yet handed
-            // off to any importer — we own it for the duration of
-            // this frame and `close` is the documented release path.
-            unsafe {
-                libc::close(plane.fd);
-            }
-        }
-        if let Some(fd) = img.semaphore_fd {
-            // SAFETY: producer-transferred opaque-fd semaphore, same
-            // ownership contract as the plane fds above.
-            unsafe {
-                libc::close(fd);
-            }
         }
     }
 }

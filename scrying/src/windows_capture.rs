@@ -13,11 +13,12 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::os::windows::io::FromRawHandle;
 
 use crate::native_frame::{Dx12SharedTexture, NativeFrame, SyncMechanism};
 use dpi::PhysicalSize;
 use windows::Win32::{
-    Foundation::{CloseHandle, HANDLE, HMODULE, HWND},
+    Foundation::{HANDLE, HMODULE, HWND},
     Graphics::{
         Direct3D::{
             D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0,
@@ -515,7 +516,7 @@ pub fn probe_graphics_capture_prerequisites() -> Result<GraphicsCaptureProbe, We
     })
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CapturedWindowFrame {
     pub shared_frame: WebView2DxgiSharedHandleFrame,
     pub content_size: PhysicalSize<u32>,
@@ -759,13 +760,13 @@ fn create_capture_item_for_hwnd(hwnd: HWND) -> Result<GraphicsCaptureItem, WebSu
 }
 
 /// Result of converting a captured D3D11 frame into an importable D3D12 frame.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct WebView2Dx12SharedFrame {
     pub size: PhysicalSize<u32>,
     pub format: wgpu::TextureFormat,
     pub generation: u64,
     /// NT shared handle suitable for `ID3D12Device::OpenSharedHandle`.
-    pub shared_handle: *mut std::ffi::c_void,
+    pub(crate) resource: grafting::Dx12SharedResource,
     /// Producer-side sync mechanism used for this frame.
     /// `SyncMechanism::None` for the keyed-mutex+CPU-spin path,
     /// `SyncMechanism::ExplicitFence` when the producer signalled a shared
@@ -778,14 +779,16 @@ pub struct WebView2Dx12SharedFrame {
 
 impl WebView2Dx12SharedFrame {
     pub fn into_surface_frame(self) -> WebSurfaceFrame {
-        WebSurfaceFrame::Native(NativeFrame::Dx12SharedTexture(Dx12SharedTexture {
-            size: self.size,
-            format: self.format,
-            generation: self.generation,
-            producer_sync: self.producer_sync,
-            fence_value: self.fence_value,
-            handle: self.shared_handle,
-        }))
+        WebSurfaceFrame::Native(NativeFrame::Dx12SharedTexture(
+            Dx12SharedTexture::from_resource(
+                self.size,
+                self.format,
+                self.generation,
+                self.producer_sync,
+                self.fence_value,
+                self.resource,
+            ),
+        ))
     }
 }
 
@@ -795,13 +798,15 @@ impl WebView2Dx12SharedFrame {
 /// try to reach after receiving a `Direct3D11CaptureFrame`. If the captured
 /// `ID3D11Texture2D` can expose a handle that `ID3D12Device::OpenSharedHandle`
 /// accepts, no CPU readback is needed.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct WebView2DxgiSharedHandleFrame {
     pub size: PhysicalSize<u32>,
     pub format: wgpu::TextureFormat,
     pub generation: u64,
-    /// NT shared handle. The caller remains responsible for closing its copy.
+    /// Non-owning raw handle view for diagnostics. The `resource` token owns
+    /// the handle for the lifetime of this frame.
     pub shared_handle: *mut std::ffi::c_void,
+    pub(crate) resource: grafting::Dx12SharedResource,
     /// Sync mechanism the consumer should use; carried through to the
     /// `Dx12SharedTexture` frame.
     pub producer_sync: SyncMechanism,
@@ -815,7 +820,7 @@ impl WebView2DxgiSharedHandleFrame {
             size: self.size,
             format: self.format,
             generation: self.generation,
-            shared_handle: self.shared_handle,
+            resource: self.resource,
             producer_sync: self.producer_sync,
             fence_value: self.fence_value,
         }
@@ -824,22 +829,6 @@ impl WebView2DxgiSharedHandleFrame {
     pub fn into_surface_frame(self) -> WebSurfaceFrame {
         self.into_dx12_frame().into_surface_frame()
     }
-}
-
-/// Close an NT shared handle returned by this module after the consumer has
-/// opened its own resource reference.
-///
-/// # Safety
-///
-/// `handle` must be a valid Win32 handle owned by the caller, and it must not
-/// be used after this call succeeds.
-pub unsafe fn close_shared_handle(handle: *mut std::ffi::c_void) -> Result<(), WebSurfaceError> {
-    if handle.is_null() {
-        return Ok(());
-    }
-
-    unsafe { CloseHandle(HANDLE(handle)) }
-        .map_err(|error| WebSurfaceError::Platform(format!("CloseHandle failed: {error}")))
 }
 
 pub fn export_capture_frame_shared_handle(
@@ -997,11 +986,17 @@ fn shared_handle_from_texture(
         ))
     })?;
 
+    let raw_handle = handle.0 as *mut std::ffi::c_void;
+    let owned_handle = unsafe {
+        std::os::windows::io::OwnedHandle::from_raw_handle(raw_handle)
+    };
+    let resource = grafting::Dx12SharedResource::from_owned_handle(owned_handle);
     Ok(WebView2DxgiSharedHandleFrame {
         size,
         format,
         generation,
-        shared_handle: handle.0 as *mut std::ffi::c_void,
+        shared_handle: raw_handle,
+        resource,
         producer_sync: SyncMechanism::None,
         fence_value: 0,
     })

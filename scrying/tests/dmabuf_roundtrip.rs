@@ -211,24 +211,18 @@ fn dmabuf_import_round_trip() {
         return;
     };
 
-    let frame = DmaBufImage {
-        size: PhysicalSize::new(WIDTH, HEIGHT),
-        format: WGPU_FORMAT,
-        drm_format: DRM_FORMAT_ARGB8888,
-        drm_modifier: fixture.drm_modifier,
-        planes: vec![DmaBufPlane {
-            fd: fixture.dmabuf_fd,
-            offset: fixture.offset,
-            stride: fixture.stride,
-        }],
-        generation: 1,
-        producer_sync: SyncMechanism::None,
-        semaphore_fd: None,
-    };
+    let frame = unsafe {
+        DmaBufImage::from_raw_owned_parts(
+            PhysicalSize::new(WIDTH, HEIGHT), WGPU_FORMAT, DRM_FORMAT_ARGB8888,
+            fixture.drm_modifier,
+            vec![DmaBufPlane { fd: fixture.dmabuf_fd, offset: fixture.offset, stride: fixture.stride }],
+            1, SyncMechanism::None, None,
+        )
+    }.expect("producer fd is owned by the frame");
 
     let importer = WgpuTextureImporter::new(fixture.host);
     let imported =
-        match importer.import_frame(&NativeFrame::DmaBufImage(frame), &ImportOptions::default()) {
+        match importer.import_frame(NativeFrame::DmaBufImage(frame), &ImportOptions::default()) {
             Ok(t) => t,
             Err(e) => {
                 panic!("FAIL: import_frame errored: {e}");
@@ -283,24 +277,18 @@ fn dmabuf_import_with_signaled_semaphore() {
     };
     eprintln!("exported producer semaphore fd={semaphore_fd}");
 
-    let frame = DmaBufImage {
-        size: PhysicalSize::new(WIDTH, HEIGHT),
-        format: WGPU_FORMAT,
-        drm_format: DRM_FORMAT_ARGB8888,
-        drm_modifier: fixture.drm_modifier,
-        planes: vec![DmaBufPlane {
-            fd: fixture.dmabuf_fd,
-            offset: fixture.offset,
-            stride: fixture.stride,
-        }],
-        generation: 2,
-        producer_sync: SyncMechanism::ExplicitExternalSemaphore,
-        semaphore_fd: Some(semaphore_fd),
-    };
+    let frame = unsafe {
+        DmaBufImage::from_raw_owned_parts(
+            PhysicalSize::new(WIDTH, HEIGHT), WGPU_FORMAT, DRM_FORMAT_ARGB8888,
+            fixture.drm_modifier,
+            vec![DmaBufPlane { fd: fixture.dmabuf_fd, offset: fixture.offset, stride: fixture.stride }],
+            2, SyncMechanism::ExplicitExternalSemaphore, Some(semaphore_fd),
+        )
+    }.expect("producer descriptors are owned by the frame");
 
     let importer = WgpuTextureImporter::new(fixture.host);
     let imported =
-        match importer.import_frame(&NativeFrame::DmaBufImage(frame), &ImportOptions::default()) {
+        match importer.import_frame(NativeFrame::DmaBufImage(frame), &ImportOptions::default()) {
             Ok(t) => t,
             Err(e) => {
                 panic!("FAIL: import_frame (with signaled semaphore) errored: {e}");
@@ -330,24 +318,18 @@ fn dmabuf_import_implicit_modifier() {
         return;
     };
 
-    let frame = DmaBufImage {
-        size: PhysicalSize::new(WIDTH, HEIGHT),
-        format: WGPU_FORMAT,
-        drm_format: DRM_FORMAT_ARGB8888,
-        drm_modifier: DRM_FORMAT_MOD_INVALID,
-        planes: vec![DmaBufPlane {
-            fd: fixture.dmabuf_fd,
-            offset: fixture.offset,
-            stride: fixture.stride,
-        }],
-        generation: 3,
-        producer_sync: SyncMechanism::None,
-        semaphore_fd: None,
-    };
+    let frame = unsafe {
+        DmaBufImage::from_raw_owned_parts(
+            PhysicalSize::new(WIDTH, HEIGHT), WGPU_FORMAT, DRM_FORMAT_ARGB8888,
+            DRM_FORMAT_MOD_INVALID,
+            vec![DmaBufPlane { fd: fixture.dmabuf_fd, offset: fixture.offset, stride: fixture.stride }],
+            3, SyncMechanism::None, None,
+        )
+    }.expect("producer fd is owned by the frame");
 
     let importer = WgpuTextureImporter::new(fixture.host);
     let imported =
-        match importer.import_frame(&NativeFrame::DmaBufImage(frame), &ImportOptions::default()) {
+        match importer.import_frame(NativeFrame::DmaBufImage(frame), &ImportOptions::default()) {
             Ok(t) => t,
             Err(e) => {
                 panic!("FAIL: import_frame (implicit modifier) errored: {e}");

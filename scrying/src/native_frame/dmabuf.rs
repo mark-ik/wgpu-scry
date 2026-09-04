@@ -15,6 +15,7 @@
 
 use std::ffi::{CStr, c_void};
 use std::mem;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 
 use ash::vk;
 use wgpu::wgc::api::Vulkan;
@@ -27,39 +28,15 @@ use super::{
 const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
 
-struct OwnedFds(Vec<i32>);
-
-impl OwnedFds {
-    fn new(fds: impl IntoIterator<Item = i32>) -> Self {
-        let mut owned = Vec::new();
-        for fd in fds {
-            if fd >= 0 && !owned.contains(&fd) {
-                owned.push(fd);
-            }
-        }
-        Self(owned)
-    }
-
-    fn disarm(&mut self) {
-        self.0.clear();
-    }
-}
-
-impl Drop for OwnedFds {
-    fn drop(&mut self) {
-        for fd in self.0.drain(..) {
-            // SAFETY: this guard exists only while Scry owns the descriptor.
-            unsafe { libc::close(fd) };
-        }
-    }
-}
-
 pub(super) fn import(
-    frame: &DmaBufImage,
+    frame: DmaBufImage,
     host: &HostWgpuContext,
 ) -> Result<ImportedTexture, InteropError> {
-    let mut plane_fds = OwnedFds::new(frame.planes.iter().map(|plane| plane.fd));
-    let mut semaphore_fd = OwnedFds::new(frame.semaphore_fd);
+    let size = frame.size;
+    let format = frame.format;
+    let generation = frame.generation;
+    let producer_sync = frame.producer_sync;
+    let semaphore_fd = frame.semaphore_fd;
 
     if host.backend != InteropBackend::Vulkan {
         return Err(InteropError::BackendMismatch {
@@ -74,23 +51,8 @@ pub(super) fn import(
     // Explicit producer completion must precede Graft's ownership-acquire
     // submit. The helper owns the fd after this handoff and closes it on every
     // pre-import error; Vulkan owns it after a successful semaphore import.
-    if let (Some(fd), SyncMechanism::ExplicitExternalSemaphore) =
-        (frame.semaphore_fd, frame.producer_sync)
-    {
-        semaphore_fd.disarm();
-        let hal_device =
-            unsafe { host.device.as_hal::<Vulkan>() }.ok_or(InteropError::BackendMismatch {
-                expected: "Vulkan",
-                actual: "non-Vulkan",
-            })?;
-        unsafe {
-            wait_on_producer_semaphore(
-                host,
-                hal_device.shared_instance().raw_instance(),
-                hal_device.raw_device(),
-                fd,
-            )?;
-        }
+    if let (Some(fd), SyncMechanism::ExplicitExternalSemaphore) = (semaphore_fd, producer_sync) {
+        unsafe { wait_on_producer_semaphore(host, fd)? };
     }
 
     let effective_modifier = if frame.drm_modifier == DRM_FORMAT_MOD_INVALID {
@@ -98,36 +60,17 @@ pub(super) fn import(
     } else {
         frame.drm_modifier
     };
+    let (graft_frame, _semaphore_owner) = frame.into_graft_import(effective_modifier)?;
     let graft_host = grafting::HostWgpuContext::new(host.device.clone(), host.queue.clone());
-    let graft_frame = grafting::vulkan_dmabuf::VulkanDmaBufImport {
-        size: frame.size,
-        format: frame.format,
-        drm_format: frame.drm_format,
-        drm_modifier: effective_modifier,
-        planes: frame
-            .planes
-            .iter()
-            .map(|plane| grafting::vulkan_dmabuf::VulkanDmaBufPlane {
-                fd: plane.fd,
-                offset: u64::from(plane.offset),
-                stride: u64::from(plane.stride),
-            })
-            .collect(),
-        queue_ownership: grafting::vulkan_dmabuf::VulkanDmaBufQueueOwnership::Foreign,
-    };
-
-    // Graft owns every plane descriptor from this point, including validation
-    // failures before Vulkan accepts the external memory.
-    plane_fds.disarm();
     let texture = grafting::vulkan_dmabuf::import_dmabuf(graft_frame, &graft_host)
         .map_err(map_graft_error)?;
 
     Ok(ImportedTexture {
         texture,
-        format: frame.format,
-        size: frame.size,
-        generation: frame.generation,
-        consumer_sync: frame.producer_sync,
+        format,
+        size,
+        generation,
+        consumer_sync: producer_sync,
     })
 }
 
@@ -150,21 +93,32 @@ fn map_graft_error(error: grafting::InteropError) -> InteropError {
 /// other work on the same wgpu queue.
 unsafe fn wait_on_producer_semaphore(
     host: &HostWgpuContext,
-    ash_instance: &ash::Instance,
-    raw_device: &ash::Device,
     semaphore_fd: i32,
 ) -> Result<(), InteropError> {
-    let mut owned_fd = OwnedFds::new([semaphore_fd]);
+    let duplicated = unsafe { libc::dup(semaphore_fd) };
+    if duplicated < 0 {
+        return Err(InteropError::Vulkan(
+            "dup producer semaphore fd failed".into(),
+        ));
+    }
+    let duplicated = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    let hal_device =
+        unsafe { host.device.as_hal::<Vulkan>() }.ok_or(InteropError::BackendMismatch {
+            expected: "Vulkan",
+            actual: "non-Vulkan",
+        })?;
+    let ash_instance = hal_device.shared_instance().raw_instance();
+    let raw_device = hal_device.raw_device();
     let raw_proc = unsafe {
         ash_instance.get_device_proc_addr(raw_device.handle(), c"vkImportSemaphoreFdKHR".as_ptr())
     };
-    if raw_proc.is_none() {
+    let Some(raw_proc) = raw_proc else {
         return Err(InteropError::Vulkan(
             "vkGetDeviceProcAddr(vkImportSemaphoreFdKHR) returned null; \
              VK_KHR_external_semaphore_fd is not enabled"
                 .into(),
         ));
-    }
+    };
     type PfnImportSemaphoreFd = unsafe extern "system" fn(vk::Device, *const c_void) -> vk::Result;
     let import_fd: PfnImportSemaphoreFd = unsafe { mem::transmute_copy(&raw_proc) };
 
@@ -176,7 +130,7 @@ unsafe fn wait_on_producer_semaphore(
     let import_info = vk::ImportSemaphoreFdInfoKHR::default()
         .semaphore(vk_semaphore)
         .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
-        .fd(semaphore_fd);
+        .fd(duplicated.as_raw_fd());
     let result = unsafe { import_fd(raw_device.handle(), &import_info as *const _ as *const _) };
     if result != vk::Result::SUCCESS {
         unsafe { raw_device.destroy_semaphore(vk_semaphore, None) };
@@ -184,7 +138,7 @@ unsafe fn wait_on_producer_semaphore(
             "vkImportSemaphoreFdKHR failed: {result:?}"
         )));
     }
-    owned_fd.disarm();
+    let _ = duplicated.into_raw_fd();
 
     let queue = unsafe { host.queue.as_hal::<Vulkan>() }.ok_or(InteropError::BackendMismatch {
         expected: "Vulkan",
@@ -327,4 +281,103 @@ pub fn build_dmabuf_capable_device(
 
     let (device, queue) = unsafe { adapter.create_device_from_hal::<Vulkan>(open, desc) }?;
     Ok((device, queue))
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use crate::native_frame::DmaBufPlane;
+
+    fn pipe_fd() -> i32 {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        unsafe { libc::close(fds[1]) };
+        fds[0]
+    }
+
+    fn fd_open(fd: i32) -> bool {
+        unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
+    }
+
+    fn frame(planes: Vec<DmaBufPlane>) -> DmaBufImage {
+        unsafe {
+            DmaBufImage::from_raw_owned_parts(
+                dpi::PhysicalSize::new(4, 4),
+                wgpu::TextureFormat::Bgra8Unorm,
+                0,
+                0,
+                planes,
+                1,
+                SyncMechanism::None,
+                None,
+            )
+            .expect("test descriptors are uniquely owned")
+        }
+    }
+
+    #[test]
+    fn repeated_plane_fd_uses_one_owner_and_closes_on_drop() {
+        let fd = pipe_fd();
+        let image = frame(vec![
+            DmaBufPlane {
+                fd,
+                offset: 0,
+                stride: 16,
+            },
+            DmaBufPlane {
+                fd,
+                offset: 16,
+                stride: 16,
+            },
+        ]);
+        let (import, _) = image.into_graft_import(0).expect("shared plane table");
+        drop(import);
+        assert!(!fd_open(fd), "repeated raw fd must close exactly once");
+    }
+
+    #[test]
+    fn distinct_dup_fds_keep_distinct_owners() {
+        let fd = pipe_fd();
+        let dup_fd = unsafe { libc::dup(fd) };
+        assert!(dup_fd >= 0);
+        let image = frame(vec![
+            DmaBufPlane {
+                fd,
+                offset: 0,
+                stride: 16,
+            },
+            DmaBufPlane {
+                fd: dup_fd,
+                offset: 16,
+                stride: 16,
+            },
+        ]);
+        let (import, _) = image.into_graft_import(0).expect("distinct plane table");
+        drop(import);
+        assert!(!fd_open(fd), "first dup fd must close on drop");
+        assert!(!fd_open(dup_fd), "second dup fd must close on drop");
+    }
+
+    #[test]
+    fn validation_failure_closes_valid_descriptors() {
+        let fd = pipe_fd();
+        let result = unsafe {
+            DmaBufImage::from_raw_owned_parts(
+                dpi::PhysicalSize::new(4, 4),
+                wgpu::TextureFormat::Bgra8Unorm,
+                0,
+                0,
+                vec![DmaBufPlane {
+                    fd,
+                    offset: 0,
+                    stride: 16,
+                }],
+                1,
+                SyncMechanism::None,
+                Some(-1),
+            )
+        };
+        assert!(result.is_err());
+        assert!(!fd_open(fd), "validation failure must close owned fds");
+    }
 }

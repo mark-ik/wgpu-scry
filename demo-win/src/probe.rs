@@ -415,7 +415,7 @@ pub(crate) fn run_windows_shared_texture_probe(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use scrying::windows_capture::{
         D3D11SharedTextureFactory, DxgiSharedHandleBridge, capture_window_frame_once,
-        close_shared_handle, probe_graphics_capture_prerequisites,
+        probe_graphics_capture_prerequisites,
     };
 
     let graphics_capture = probe_graphics_capture_prerequisites()?;
@@ -441,15 +441,11 @@ pub(crate) fn run_windows_shared_texture_probe(
         return Err("D3D11 shared texture bridge did not produce a native frame".into());
     };
     let importer = WgpuTextureImporter::new(host.clone());
-    let imported = importer.import_frame(&native_frame, &ImportOptions::default())?;
+    let imported = importer.import_frame(native_frame, &ImportOptions::default())?;
     println!(
         "D3D11 shared texture probe: imported {:?} {}x{} generation {}",
         imported.format, imported.size.width, imported.size.height, imported.generation
     );
-
-    unsafe {
-        close_shared_handle(handle)?;
-    }
 
     let hwnd = hwnd_from_window(window)?;
     let captured = match unsafe {
@@ -470,14 +466,13 @@ pub(crate) fn run_windows_shared_texture_probe(
             )?
         }
     };
-    let captured_handle = captured.shared_frame.shared_handle;
     let captured_dx12 = DxgiSharedHandleBridge.bridge_shared_handle(captured.shared_frame)?;
     let captured_surface_frame = captured_dx12.into_surface_frame();
     let WebSurfaceFrame::Native(captured_native_frame) = captured_surface_frame else {
         return Err("captured window bridge did not produce a native frame".into());
     };
     let captured_imported =
-        importer.import_frame(&captured_native_frame, &ImportOptions::default())?;
+        importer.import_frame(captured_native_frame, &ImportOptions::default())?;
     println!(
         "GraphicsCapture window probe: captured {}x{}, imported {:?} {}x{} generation {}",
         captured.content_size.width,
@@ -487,10 +482,6 @@ pub(crate) fn run_windows_shared_texture_probe(
         captured_imported.size.height,
         captured_imported.generation
     );
-    unsafe {
-        close_shared_handle(captured_handle)?;
-    }
-
     Ok(())
 }
 
@@ -605,7 +596,6 @@ pub(crate) fn run_platform_composition_visual_probe(
     fence_shared_handle: Option<*mut std::ffi::c_void>,
     cli: &Cli,
 ) -> Result<Option<CapturedComposition>, Box<dyn std::error::Error>> {
-    use scrying::windows_capture::close_shared_handle;
     use windows::Win32::System::WinRT::{
         CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
         DispatcherQueueOptions,
@@ -758,15 +748,16 @@ pub(crate) fn run_platform_composition_visual_probe(
     {
         let mut producer_for_readback = producer;
         let captured = producer_for_readback.acquire_full_frame()?;
+        let content_size = captured.content_size;
         let importer = WgpuTextureImporter::new(host.clone());
-        let WebSurfaceFrame::Native(ref native_frame) = captured.frame else {
+        let WebSurfaceFrame::Native(native_frame) = captured.frame else {
             return Err("WebView2 composition producer did not emit a native frame".into());
         };
         let imported = importer.import_frame(native_frame, &ImportOptions::default())?;
         println!(
             "GraphicsCapture WebView2 CompositionController WebView target visual: captured {}x{}, imported {:?} {}x{} generation {}",
-            captured.content_size.width,
-            captured.content_size.height,
+            content_size.width,
+            content_size.height,
             imported.format,
             imported.size.width,
             imported.size.height,
@@ -774,9 +765,6 @@ pub(crate) fn run_platform_composition_visual_probe(
         );
         let html_background_rgb = (0x17u8, 0x20u8, 0x2au8);
         validate_imported_pixels(&imported, &host.device, &host.queue, html_background_rgb)?;
-        unsafe {
-            close_shared_handle(captured.shared_handle)?;
-        }
         return Ok(Some(CapturedComposition {
             imported: Some(imported),
             producer: producer_for_readback,

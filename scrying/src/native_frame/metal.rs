@@ -11,12 +11,9 @@
 use super::{HostWgpuContext, ImportedTexture, InteropBackend, InteropError, MetalTextureRef};
 
 pub(super) fn import(
-    frame: &MetalTextureRef,
+    frame: MetalTextureRef,
     host: &HostWgpuContext,
 ) -> Result<ImportedTexture, InteropError> {
-    if frame.raw_metal_texture.is_null() {
-        return Err(InteropError::InvalidFrame("raw_metal_texture is null"));
-    }
     if host.backend != InteropBackend::Metal {
         return Err(InteropError::BackendMismatch {
             expected: "Metal",
@@ -24,22 +21,26 @@ pub(super) fn import(
         });
     }
 
-    let graft_host = grafting::HostWgpuContext::new(host.device.clone(), host.queue.clone());
-    let graft_frame = grafting::MetalTextureRef {
-        size: frame.size,
-        format: frame.format,
-        generation: frame.generation,
+    let size = frame.size;
+    let format = frame.format;
+    let generation = frame.generation;
+    let producer_sync = frame.producer_sync;
+    let metadata = grafting::FrameMetadata {
+        size,
+        format,
+        generation,
         producer_sync: grafting::SyncMechanism::None,
-        raw_metal_texture: frame.raw_metal_texture,
     };
-    let texture = grafting::import_metal_texture_ref(&graft_frame, &graft_host)
+    let graft_frame = grafting::MetalTextureRef::new(metadata, frame.raw_metal_texture);
+    let graft_host = grafting::HostWgpuContext::new(host.device.clone(), host.queue.clone());
+    let texture = grafting::import_metal_texture_ref(graft_frame, &graft_host)
         .map_err(|error| InteropError::Metal(error.to_string()))?;
 
     Ok(ImportedTexture {
         texture,
-        format: frame.format,
-        size: frame.size,
-        generation: frame.generation,
-        consumer_sync: frame.producer_sync,
+        format,
+        size,
+        generation,
+        consumer_sync: producer_sync,
     })
 }
