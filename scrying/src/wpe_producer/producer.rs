@@ -47,7 +47,6 @@ pub(super) struct WpeHandles {
 /// callers interact only through the `WebSurfaceProducer` trait.
 pub struct WpeProducer {
     pub(super) capabilities: WebSurfaceCapabilities,
-    pub(super) size: PhysicalSize<u32>,
     pub(super) offset: (f32, f32),
     pub(super) pending_frame: Arc<Mutex<Option<DmaBufImage>>>,
     /// Monotonic frame counter shared with the `buffer-rendered` closure (which
@@ -190,7 +189,6 @@ impl WpeProducer {
 
         let producer = Self {
             capabilities: super::linux_wpe_capabilities(),
-            size: config.size,
             offset: config.offset,
             pending_frame: Arc::new(Mutex::new(None)),
             generation: Arc::new(AtomicU64::new(0)),
@@ -232,7 +230,6 @@ impl WpeProducer {
         }
         Ok(Self {
             capabilities: super::linux_wpe_capabilities(),
-            size: config.size,
             offset: config.offset,
             pending_frame: Arc::new(Mutex::new(None)),
             generation: Arc::new(AtomicU64::new(0)),

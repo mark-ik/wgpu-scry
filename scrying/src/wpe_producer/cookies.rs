@@ -65,10 +65,10 @@ const COOKIE_OP_TIMEOUT: Duration = Duration::from_secs(3);
 type CookieResult<T> = Rc<RefCell<Option<Result<T, String>>>>;
 
 /// State owned jointly by the synchronous caller and its one-shot GAsync
-/// callback. The `ObjectRef` is a strong GObject reference, so this operation
+/// callback. The `glib::Object` is a strong GObject reference, so this operation
 /// remains valid even if the WPE producer releases its WebView after a timeout.
 struct CookieOperation<T> {
-    manager: glib::ObjectRef,
+    manager: glib::Object,
     cancellable: Cancellable,
     result: CookieResult<T>,
 }
@@ -81,7 +81,7 @@ impl<T> CookieOperation<T> {
     /// pointer for this call. The caller obtains it from the live WebView.
     unsafe fn new(manager: *mut ffi::WebKitCookieManager) -> Rc<Self> {
         debug_assert!(!manager.is_null());
-        let manager: glib::ObjectRef = unsafe { from_glib_none(manager.cast()) };
+        let manager: glib::Object = unsafe { from_glib_none(manager.cast()) };
         Rc::new(Self {
             manager,
             cancellable: Cancellable::new(),
@@ -94,7 +94,9 @@ impl<T> CookieOperation<T> {
     }
 
     fn cancellable(&self) -> *mut std::ffi::c_void {
-        self.cancellable.to_glib_none().0.cast()
+        ToGlibPtr::<*mut gio::ffi::GCancellable>::to_glib_none(&self.cancellable)
+            .0
+            .cast()
     }
 
     fn cancel(&self) {

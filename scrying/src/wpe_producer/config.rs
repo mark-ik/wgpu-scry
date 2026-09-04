@@ -11,7 +11,10 @@ use dpi::PhysicalSize;
 /// Configuration for [`WpeProducer`].
 #[derive(Clone, Debug)]
 pub struct WpeProducerConfig {
-    /// Initial view size in physical pixels.
+    /// Requested initial view size in physical pixels.
+    ///
+    /// The current WPE 2.52 headless backend renders at its fixed native size;
+    /// this value is validated but cannot yet change that effective size.
     pub size: PhysicalSize<u32>,
     /// Offset of the embedded view relative to the host surface, in
     /// device-independent pixels.

@@ -467,6 +467,5 @@ mod tests {
             producer.resize(requested),
             Err(crate::WebSurfaceError::Unsupported(_))
         ));
-        assert_eq!(producer.size, PhysicalSize::new(256, 256));
     }
 }
