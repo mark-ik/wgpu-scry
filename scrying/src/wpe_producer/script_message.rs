@@ -232,7 +232,7 @@ unsafe extern "C" fn script_result_trampoline(
                         .to_string_lossy()
                         .into_owned();
                     // SAFETY: `jsc_value_to_string` allocates with GLib.
-                    unsafe { glib::ffi::g_free(raw_text.cast_mut().cast()) };
+                    unsafe { glib::ffi::g_free(raw_text.cast()) };
                     Ok(text)
                 }
             }
