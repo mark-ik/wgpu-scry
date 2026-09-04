@@ -48,7 +48,10 @@ mod script_message;
 mod trait_impl;
 
 use crate::native_frame::{CapabilityStatus, UnsupportedReason};
-use crate::{SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceMode};
+use crate::{
+    CookieCapabilities, ScriptCapabilities, SystemWebviewBackend,
+    WebSurfaceCapabilities, WebSurfaceFeatureCapabilities, WebSurfaceMode,
+};
 
 pub use config::WebKit6ProducerConfig;
 pub use producer::WebKit6Producer;
@@ -69,5 +72,61 @@ pub(crate) fn linux_webkit6_capabilities() -> WebSurfaceCapabilities {
         cpu_snapshot: CapabilityStatus::Supported,
         supported_frames: Vec::new(),
         reason: "WebKitGTK 6.0 / GTK 4 producer (Phase 5 first slice): hidden gtk4::Window hosting the WebKitWebView, CpuRgba snapshots via webkit_web_view_get_snapshot → gdk::Texture::download. Input forwarding / cookies / scheme handlers / etc. are follow-on slices.",
+        features: gtk6_features(),
+    }
+}
+
+fn gtk6_features() -> WebSurfaceFeatureCapabilities {
+    WebSurfaceFeatureCapabilities {
+        cookies: CookieCapabilities {
+            read: CapabilityStatus::Supported,
+            write: CapabilityStatus::Supported,
+            delete: CapabilityStatus::Supported,
+            change_events: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            same_site: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            partitioned: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            http_only: CapabilityStatus::Supported,
+            secure: CapabilityStatus::Supported,
+            expires: CapabilityStatus::Supported,
+        },
+        script: ScriptCapabilities {
+            execute: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            result: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            exceptions: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            bounded_blocking: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        },
+        page_capture: CapabilityStatus::Supported,
+        devtools: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        downloads: CapabilityStatus::Supported,
+        popups: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        drag_drop: CapabilityStatus::Partial(
+            "GTK 4 drag forwarding synthesizes DOM events without a native data payload.",
+        ),
+        pointer_input: CapabilityStatus::Partial(
+            "GTK 4 pointer forwarding is JS-synthesized and may not preserve native event trust or device metadata.",
+        ),
+        ime: CapabilityStatus::Partial(
+            "GTK 4 exposes host keyboard/commit and caret observability, but does not forward native preedit text.",
+        ),
+        accessibility: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        degradation_reasons: vec![
+            "GTK 4 CPU snapshots are blocking and must be requested through acquire_frame.",
+            "GTK 4 cookie-change events, developer tools, and accessibility-tree export are not exposed by this producer.",
+        ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_matrix_names_gtk6_degradations() {
+        let caps = linux_webkit6_capabilities();
+        assert_eq!(caps.features.page_capture, CapabilityStatus::Supported);
+        assert!(matches!(caps.features.cookies.partitioned, CapabilityStatus::Unsupported(_)));
+        assert!(matches!(caps.features.drag_drop, CapabilityStatus::Partial(_)));
+        assert!(matches!(caps.features.ime, CapabilityStatus::Partial(_)));
+        assert!(matches!(caps.features.devtools, CapabilityStatus::Unsupported(_)));
     }
 }

@@ -74,6 +74,10 @@ pub enum NativeFrameKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CapabilityStatus {
     Supported,
+    /// The operation exists, but the backend drops or cannot represent part
+    /// of the requested contract. The detail is deliberately public so a
+    /// host can choose a fallback without probing by trial and error.
+    Partial(&'static str),
     Unsupported(UnsupportedReason),
 }
 

@@ -548,6 +548,7 @@ impl WkWebViewProducer {
                 cpu_snapshot: native_frame::CapabilityStatus::Supported,
                 supported_frames: vec![native_frame::NativeFrameKind::MetalTextureRef],
                 reason: "WkWebViewProducer slice A: WKWebView lifecycle (navigate / resize / set_offset) over an overlay surface; ScreenCaptureKit → IOSurface → MetalTextureRef capture pipeline is the next slice.",
+                features: crate::wkwebview_features_for_producer(),
             },
             webview,
             parent_view,

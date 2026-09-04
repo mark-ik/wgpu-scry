@@ -404,6 +404,7 @@ impl crate::WebSurfaceProducer for WebView2CompositionProducer {
             cpu_snapshot: crate::native_frame::CapabilityStatus::Supported,
             supported_frames: vec![crate::native_frame::NativeFrameKind::Dx12SharedTexture],
             reason: "WebView2 CompositionController visual + Windows.Graphics.Capture + shared D3D11 NT-handle texture imported as Dx12SharedTexture; keyboard/text uses WebView2 CDP Input on the pure visual-hosted path.",
+            features: crate::webview2_features_for_producer(),
         }
     }
 

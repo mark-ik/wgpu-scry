@@ -30,10 +30,12 @@ the remaining Graft dependency are recorded in the progress log below.
   ownership and by-value import. Scry still translates its borrowed
   `DmaBufImage`/DX12 frame into Graft's current boundary; changing that here
   would create a partial cross-repository API migration.
-- **2026-09-03 — remains open for the neutral-contract assessment:** expand
-  Scry's capability surface one-to-one for cookies, script, capture,
-  devtools, downloads, popups, drag/drop, IME, accessibility, and degradation
-  reasons before asking Inker or the adapters to infer those features.
+- **2026-09-03 — capability matrix landed:** `WebSurfaceCapabilities::features`
+  now reports those domains explicitly, with structured cookie-attribute
+  statuses and `Partial` caveats for pointer metadata, drag payloads, IME
+  preedit, and Safari inspector attachment. The neutral shared-contract
+  extraction remains a separate assessment; this matrix does not adapt Graft
+  or change Inker's dependency.
 
 - **Converge on `grafting` as the shared native-texture interop crate.** `welding`
   and `scrying` each carry their own DX12 / Metal / Vulkan-DMABUF import + sync

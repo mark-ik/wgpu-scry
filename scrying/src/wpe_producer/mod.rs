@@ -43,7 +43,10 @@ pub use config::WpeProducerConfig;
 pub use producer::WpeProducer;
 
 use crate::native_frame::{CapabilityStatus, NativeFrameKind, UnsupportedReason};
-use crate::{SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceMode};
+use crate::{
+    CookieCapabilities, ScriptCapabilities, SystemWebviewBackend,
+    WebSurfaceCapabilities, WebSurfaceFeatureCapabilities, WebSurfaceMode,
+};
 
 pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
     if cfg!(feature = "wpe") {
@@ -59,6 +62,7 @@ pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
             ),
             supported_frames: vec![NativeFrameKind::DmaBufImage],
             reason: "WPE is the Linux primary backend: a headless WPEDisplay + WebKitWebView produces DmaBufImage frames, and a compatible wgpu Vulkan host imports them through Graft.",
+            features: wpe_features(),
         }
     } else {
         WebSurfaceCapabilities {
@@ -75,7 +79,61 @@ pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
             ),
             supported_frames: Vec::new(),
             reason: "WPE is a compile-only producer shell until the `wpe` feature is enabled; enable it to build the WPEPlatform FFI bridge and DMABUF frame production.",
+            features: wpe_features(),
         }
+    }
+}
+
+fn wpe_features() -> WebSurfaceFeatureCapabilities {
+    #[cfg(feature = "wpe")]
+    {
+        WebSurfaceFeatureCapabilities {
+            cookies: CookieCapabilities {
+                read: CapabilityStatus::Supported,
+                write: CapabilityStatus::Supported,
+                delete: CapabilityStatus::Supported,
+                change_events: CapabilityStatus::Unsupported(
+                    UnsupportedReason::PlatformNotImplemented,
+                ),
+                same_site: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+                partitioned: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+                http_only: CapabilityStatus::Supported,
+                secure: CapabilityStatus::Supported,
+                expires: CapabilityStatus::Supported,
+            },
+            script: ScriptCapabilities {
+                execute: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+                result: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+                exceptions: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+                bounded_blocking: CapabilityStatus::Unsupported(
+                    UnsupportedReason::PlatformNotImplemented,
+                ),
+            },
+            page_capture: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            devtools: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            downloads: CapabilityStatus::Supported,
+            popups: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            drag_drop: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            pointer_input: CapabilityStatus::Partial(
+                "WPE does not emit Enter, Leave, or CaptureChanged pointer events through its native mapping.",
+            ),
+            ime: CapabilityStatus::Partial(
+                "WPE exposes host keyboard/commit and caret observability, but does not forward native preedit text.",
+            ),
+            accessibility: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            degradation_reasons: vec![
+                "WPE has no portable PNG page-snapshot operation.",
+                "WPE has no producer-owned Web Inspector or popup routing API.",
+                "WPE host drag payload synthesis and cookie-change events are not implemented.",
+            ],
+        }
+    }
+    #[cfg(not(feature = "wpe"))]
+    {
+        WebSurfaceFeatureCapabilities::unsupported(
+            UnsupportedReason::PlatformNotImplemented,
+            "WPE runtime operations are unavailable because the `wpe` feature is disabled.",
+        )
     }
 }
 
@@ -94,6 +152,14 @@ mod tests {
         ));
         assert!(caps.supported_frames.is_empty());
         assert!(caps.reason.contains("compile-only"));
+        assert!(matches!(
+            caps.features.cookies.read,
+            CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented)
+        ));
+        assert!(matches!(
+            caps.features.pointer_input,
+            CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented)
+        ));
     }
 
     #[cfg(feature = "wpe")]
@@ -103,5 +169,7 @@ mod tests {
         assert_eq!(caps.preferred_mode, WebSurfaceMode::ImportedTexture);
         assert_eq!(caps.imported_texture, CapabilityStatus::Supported);
         assert_eq!(caps.supported_frames, vec![NativeFrameKind::DmaBufImage]);
+        assert!(matches!(caps.features.pointer_input, CapabilityStatus::Partial(_)));
+        assert!(matches!(caps.features.ime, CapabilityStatus::Partial(_)));
     }
 }

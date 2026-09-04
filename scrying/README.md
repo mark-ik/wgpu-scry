@@ -53,6 +53,27 @@ Per-platform producer modules:
 | macOS | [`wkwebview_producer`] | **Implemented.** Runtime-driven by [`demo-mac`]. Slices A–N + the `MetalTextureRef` import path all exercised end-to-end. See [`design_docs/2026-05-07_platform_ceilings.md`](../design_docs/2026-05-07_platform_ceilings.md). | `WKWebView` hosted in NSView → `ScreenCaptureKit` stream bound to the host window → `CMSampleBuffer` → `IOSurfaceRef` → `MTLTexture` (via `MTLDevice::newTextureWithDescriptor:iosurface:plane:`) → `wgpu` Metal import (via `wgpu::hal::metal::Device::texture_from_raw`). |
 | Linux | [`wpe_producer`], [`webkitgtk_producer`], [`webkit6_producer`] | **Implemented behind backend features.** `wpe` enables the headless WPEPlatform producer; its wgpu 30 DMABUF path is pixel-verified on AMD Renoir/RADV. WebKitGTK 4.1 and 6.0 are CPU-snapshot alternatives. Their `try_acquire_frame` path is deliberately non-blocking and returns `None`; call `acquire_frame` when a blocking CPU snapshot is acceptable. | `WPEWebView` + `WPEViewBackendDMABuf` → `DmaBufImage` → Graft's host-side Vulkan import. |
 
+## Capability matrix
+
+`WebSurfaceCapabilities::features` is the host-facing contract for browser
+operations. Every field is an explicit `Supported`, `Partial` (with a caveat),
+or `Unsupported` status. Hosts should inspect it before selecting a fallback.
+The matrix covers cookie read/write/delete/change events and attributes,
+script execution/results/exceptions and timeout behavior, page capture,
+developer tools, downloads, popups, drag/drop, pointer input, IME, and
+accessibility. `degradation_reasons` carries stable explanations for backend
+limits such as host API mismatches, reduced pointer metadata, and GTK's
+blocking CPU snapshot path.
+
+The current honest limits are important: WebKitGTK and WPE do not expose
+script results through the portable producer trait; WKWebView cannot open
+Safari Web Inspector or synthesize capture-mode drag payloads; WebView2's
+portable drag method cannot carry its required `IDataObject`; and none of the
+four producers exports an accessibility tree. Cookie `SameSite` and
+`Partitioned` fields are explicitly reported as unsupported on every current
+backend, while secure, HttpOnly, and expiry attributes are reported
+individually.
+
 The Windows and macOS producers cover the producer/consumer split, lazy capture standup, lifecycle teardown, and platform-appropriate cross-API sync (D3D11 keyed-mutex on Windows; implicit IOSurface coherence + `MTLSharedEvent` scaffolding on macOS). The WPE producer exposes owned DMABUF frame metadata and duplicates its fds before releasing the WPE buffer back to the producer pool.
 
 ## Windows producer details

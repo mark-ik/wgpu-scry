@@ -76,7 +76,10 @@ mod script_message;
 mod trait_impl;
 
 use crate::native_frame::{CapabilityStatus, UnsupportedReason};
-use crate::{SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceMode};
+use crate::{
+    CookieCapabilities, ScriptCapabilities, SystemWebviewBackend,
+    WebSurfaceCapabilities, WebSurfaceFeatureCapabilities, WebSurfaceMode,
+};
 
 pub use config::WebKitGtkProducerConfig;
 pub use producer::WebKitGtkProducer;
@@ -104,5 +107,61 @@ pub(crate) fn linux_webkitgtk_capabilities() -> WebSurfaceCapabilities {
         cpu_snapshot: CapabilityStatus::Supported,
         supported_frames: Vec::new(),
         reason: "WebKitGTK producer hosts an offscreen WebKitWebView and emits CpuRgba snapshots via webkit_web_view_get_snapshot. Native GPU texture import (DMABUF / wlroots screencopy) is future work; native overlay is structurally out-of-scope for the offscreen-rendering shape.",
+        features: gtk_features(),
+    }
+}
+
+fn gtk_features() -> WebSurfaceFeatureCapabilities {
+    WebSurfaceFeatureCapabilities {
+        cookies: CookieCapabilities {
+            read: CapabilityStatus::Supported,
+            write: CapabilityStatus::Supported,
+            delete: CapabilityStatus::Supported,
+            change_events: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            same_site: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            partitioned: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            http_only: CapabilityStatus::Supported,
+            secure: CapabilityStatus::Supported,
+            expires: CapabilityStatus::Supported,
+        },
+        script: ScriptCapabilities {
+            execute: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            result: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            exceptions: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            bounded_blocking: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        },
+        page_capture: CapabilityStatus::Supported,
+        devtools: CapabilityStatus::Supported,
+        downloads: CapabilityStatus::Supported,
+        popups: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        drag_drop: CapabilityStatus::Partial(
+            "GTK drag forwarding synthesizes DOM events without a native data payload.",
+        ),
+        pointer_input: CapabilityStatus::Partial(
+            "GTK pointer forwarding falls back to JS synthesis when native dispatch is unavailable.",
+        ),
+        ime: CapabilityStatus::Partial(
+            "GTK exposes host keyboard/commit and caret observability, but does not forward native preedit text.",
+        ),
+        accessibility: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        degradation_reasons: vec![
+            "GTK CPU snapshots are blocking and must be requested through acquire_frame.",
+            "GTK cookie-change events and accessibility-tree export are not exposed by this producer.",
+        ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_matrix_names_gtk_degradations() {
+        let caps = linux_webkitgtk_capabilities();
+        assert_eq!(caps.features.page_capture, CapabilityStatus::Supported);
+        assert!(matches!(caps.features.cookies.same_site, CapabilityStatus::Unsupported(_)));
+        assert!(matches!(caps.features.drag_drop, CapabilityStatus::Partial(_)));
+        assert!(matches!(caps.features.ime, CapabilityStatus::Partial(_)));
+        assert!(matches!(caps.features.accessibility, CapabilityStatus::Unsupported(_)));
     }
 }

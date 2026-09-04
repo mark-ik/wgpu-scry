@@ -198,6 +198,87 @@ pub struct WebSurfaceCapabilities {
     pub cpu_snapshot: CapabilityStatus,
     pub supported_frames: Vec<NativeFrameKind>,
     pub reason: &'static str,
+    /// Non-frame operations exposed by the selected producer.
+    pub features: WebSurfaceFeatureCapabilities,
+}
+
+/// Cookie-store operations exposed by a producer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CookieCapabilities {
+    pub read: CapabilityStatus,
+    pub write: CapabilityStatus,
+    pub delete: CapabilityStatus,
+    pub change_events: CapabilityStatus,
+    pub same_site: CapabilityStatus,
+    pub partitioned: CapabilityStatus,
+    pub http_only: CapabilityStatus,
+    pub secure: CapabilityStatus,
+    pub expires: CapabilityStatus,
+}
+
+/// JavaScript execution operations exposed by a producer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScriptCapabilities {
+    pub execute: CapabilityStatus,
+    pub result: CapabilityStatus,
+    pub exceptions: CapabilityStatus,
+    /// Whether the result path honors the caller's timeout while blocking.
+    pub bounded_blocking: CapabilityStatus,
+}
+
+/// Explicit capability matrix for host-visible, non-frame operations.
+///
+/// `Partial` means the operation exists but has a documented degradation;
+/// hosts should inspect its detail instead of assuming browser parity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebSurfaceFeatureCapabilities {
+    pub cookies: CookieCapabilities,
+    pub script: ScriptCapabilities,
+    pub page_capture: CapabilityStatus,
+    pub devtools: CapabilityStatus,
+    pub downloads: CapabilityStatus,
+    pub popups: CapabilityStatus,
+    pub drag_drop: CapabilityStatus,
+    pub pointer_input: CapabilityStatus,
+    pub ime: CapabilityStatus,
+    pub accessibility: CapabilityStatus,
+    /// Stable, host-actionable explanations for degraded or unavailable
+    /// paths that do not fit in an individual status field.
+    pub degradation_reasons: Vec<&'static str>,
+}
+
+impl WebSurfaceFeatureCapabilities {
+    fn unsupported(reason: UnsupportedReason, explanation: &'static str) -> Self {
+        let status = || CapabilityStatus::Unsupported(reason.clone());
+        Self {
+            cookies: CookieCapabilities {
+                read: status(),
+                write: status(),
+                delete: status(),
+                change_events: status(),
+                same_site: status(),
+                partitioned: status(),
+                http_only: status(),
+                secure: status(),
+                expires: status(),
+            },
+            script: ScriptCapabilities {
+                execute: status(),
+                result: status(),
+                exceptions: status(),
+                bounded_blocking: status(),
+            },
+            page_capture: status(),
+            devtools: status(),
+            downloads: status(),
+            popups: status(),
+            drag_drop: status(),
+            pointer_input: status(),
+            ime: status(),
+            accessibility: status(),
+            degradation_reasons: vec![explanation],
+        }
+    }
 }
 
 impl WebSurfaceCapabilities {
@@ -214,6 +295,7 @@ impl WebSurfaceCapabilities {
                         crate::native_frame::UnsupportedReason::HostBackendUnavailable,
                     ),
                 };
+                let features = wkwebview_features();
                 Self {
                     backend: SystemWebviewBackend::WkWebView,
                     // ImportedTexture only when the host's wgpu
@@ -229,6 +311,7 @@ impl WebSurfaceCapabilities {
                     cpu_snapshot: CapabilityStatus::Supported,
                     supported_frames: vec![NativeFrameKind::MetalTextureRef],
                     reason: "WKWebView producer: ScreenCaptureKit → IOSurface → MTLTexture path is wired (requires Screen Recording permission and a Metal-backed host wgpu device); falls back to NativeChildOverlay if the host isn't on Metal, and CpuSnapshot via takeSnapshot: is always available.",
+                    features,
                 }
             }
             SystemWebviewBackend::Wpe => {
@@ -288,6 +371,10 @@ impl WebSurfaceCapabilities {
                 ),
                 supported_frames: Vec::new(),
                 reason: "No system-webview backend is defined for this platform.",
+                features: WebSurfaceFeatureCapabilities::unsupported(
+                    UnsupportedReason::HostBackendUnavailable,
+                    "No system-webview backend is defined for this platform.",
+                ),
             },
         }
     }
@@ -320,6 +407,10 @@ fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
         ),
         supported_frames: Vec::new(),
         reason: "WPE is only available on Linux.",
+        features: WebSurfaceFeatureCapabilities::unsupported(
+            UnsupportedReason::PlatformNotImplemented,
+            "WPE is only available on Linux.",
+        ),
     }
 }
 
@@ -359,7 +450,110 @@ fn linux_webkitgtk_capabilities() -> WebSurfaceCapabilities {
         ),
         supported_frames: Vec::new(),
         reason: "WebKitGTK producer is only available on Linux with the `webkitgtk-fallback` (GTK 3 / WebKitGTK 4.1) or `webkit6` (GTK 4 / WebKitGTK 6.0) feature enabled.",
+        features: WebSurfaceFeatureCapabilities::unsupported(
+            UnsupportedReason::PlatformNotImplemented,
+            "WebKitGTK producer is unavailable because its Linux feature is disabled.",
+        ),
     }
+}
+
+fn webview2_features(imported_texture: &CapabilityStatus) -> WebSurfaceFeatureCapabilities {
+    let host_reason = if *imported_texture == CapabilityStatus::Supported {
+        None
+    } else {
+        Some("WebView2 imported frames require a D3D12 host device; overlay remains available.")
+    };
+    let mut degradation_reasons = vec![
+        "WebView2 cookie enumeration does not round-trip SameSite or Partitioned attributes.",
+        "WebView2 surfaces script execution failures as WebSurfaceError text; structured JavaScript exception fields are not preserved.",
+        "WebView2 drag forwarding is exposed through concrete IDataObject methods, not the portable trait method.",
+        "WebView2 accessibility-tree export is not exposed by this producer.",
+    ];
+    if let Some(reason) = host_reason {
+        degradation_reasons.push(reason);
+    }
+    WebSurfaceFeatureCapabilities {
+        cookies: CookieCapabilities {
+            read: CapabilityStatus::Supported,
+            write: CapabilityStatus::Supported,
+            delete: CapabilityStatus::Supported,
+            change_events: CapabilityStatus::Supported,
+            same_site: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            partitioned: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            http_only: CapabilityStatus::Supported,
+            secure: CapabilityStatus::Supported,
+            expires: CapabilityStatus::Supported,
+        },
+        script: ScriptCapabilities {
+            execute: CapabilityStatus::Supported,
+            result: CapabilityStatus::Supported,
+            exceptions: CapabilityStatus::Partial(
+                "Execution failures surface as WebSurfaceError text; structured JavaScript exception fields are not preserved.",
+            ),
+            bounded_blocking: CapabilityStatus::Supported,
+        },
+        page_capture: CapabilityStatus::Supported,
+        devtools: CapabilityStatus::Supported,
+        downloads: CapabilityStatus::Supported,
+        popups: CapabilityStatus::Supported,
+        drag_drop: CapabilityStatus::Partial(
+            "Use WebView2CompositionProducer::drag_enter/drag_over/drag_leave/drop_data with an IDataObject.",
+        ),
+        pointer_input: CapabilityStatus::Supported,
+        ime: CapabilityStatus::Partial(
+            "WebView2 forwards keyboard and IME messages, but native OS IME ownership remains with the host.",
+        ),
+        accessibility: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        degradation_reasons,
+    }
+}
+
+pub(crate) fn webview2_features_for_producer() -> WebSurfaceFeatureCapabilities {
+    webview2_features(&CapabilityStatus::Supported)
+}
+
+fn wkwebview_features() -> WebSurfaceFeatureCapabilities {
+    let degradation_reasons = vec![
+        "WKWebView cookie setters and reads do not round-trip SameSite or Partitioned attributes.",
+        "WKWebView does not expose execute-script results through the portable producer trait.",
+        "WKWebView capture-mode drag forwarding cannot synthesize NSDraggingInfo; overlay drags remain native.",
+        "WKWebView maps touch and pen input to mouse events, dropping pointer identity, pressure, and tilt.",
+        "WKWebView exposes inspector attachment through setInspectable, but cannot open Safari Web Inspector programmatically.",
+        "WKWebView accessibility-tree export is not exposed by this producer.",
+    ];
+    WebSurfaceFeatureCapabilities {
+        cookies: CookieCapabilities {
+            read: CapabilityStatus::Supported,
+            write: CapabilityStatus::Supported,
+            delete: CapabilityStatus::Supported,
+            change_events: CapabilityStatus::Supported,
+            same_site: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            partitioned: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            http_only: CapabilityStatus::Supported,
+            secure: CapabilityStatus::Supported,
+            expires: CapabilityStatus::Supported,
+        },
+        script: ScriptCapabilities {
+            execute: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            result: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            exceptions: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+            bounded_blocking: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        },
+        page_capture: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        devtools: CapabilityStatus::Partial("Safari Web Inspector must attach externally."),
+        downloads: CapabilityStatus::Supported,
+        popups: CapabilityStatus::Supported,
+        drag_drop: CapabilityStatus::Partial("Capture-mode host drag payloads are unavailable."),
+        pointer_input: CapabilityStatus::Partial("Touch and pen metadata are reduced to mouse events."),
+        ime: CapabilityStatus::Supported,
+        accessibility: CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented),
+        degradation_reasons,
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn wkwebview_features_for_producer() -> WebSurfaceFeatureCapabilities {
+    wkwebview_features()
 }
 
 fn probe_webview2(host: Option<&HostWgpuContext>) -> WebSurfaceCapabilities {
@@ -378,6 +572,7 @@ fn probe_webview2(host: Option<&HostWgpuContext>) -> WebSurfaceCapabilities {
     } else {
         WebSurfaceMode::NativeChildOverlay
     };
+    let features = webview2_features(&imported_texture);
 
     WebSurfaceCapabilities {
         backend: SystemWebviewBackend::WebView2,
@@ -387,6 +582,7 @@ fn probe_webview2(host: Option<&HostWgpuContext>) -> WebSurfaceCapabilities {
         cpu_snapshot: CapabilityStatus::Supported,
         supported_frames: vec![NativeFrameKind::Dx12SharedTexture],
         reason: "Windows target path is WebView2 CompositionController visual capture into a D3D texture, then Dx12SharedTexture import. Pure visual hosting uses WebView2 CDP Input for keyboard/text; native OS IME ownership remains host-driven.",
+        features,
     }
 }
 
@@ -1660,6 +1856,24 @@ mod tests {
                 crate::native_frame::UnsupportedReason::HostBackendUnavailable,
             )
         );
+        assert_eq!(caps.features.cookies.read, CapabilityStatus::Supported);
+        assert!(matches!(caps.features.cookies.same_site, CapabilityStatus::Unsupported(_)));
+        assert!(matches!(caps.features.cookies.partitioned, CapabilityStatus::Unsupported(_)));
+        assert_eq!(caps.features.script.result, CapabilityStatus::Supported);
+        assert!(matches!(
+            caps.features.script.exceptions,
+            CapabilityStatus::Partial(_)
+        ));
+        assert_eq!(caps.features.pointer_input, CapabilityStatus::Supported);
+        assert!(matches!(
+            caps.features.drag_drop,
+            CapabilityStatus::Partial(_)
+        ));
+        assert!(matches!(
+            caps.features.accessibility,
+            CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented)
+        ));
+        assert!(!caps.features.degradation_reasons.is_empty());
     }
 
     #[test]
@@ -1667,6 +1881,18 @@ mod tests {
         let mut producer = OverlayOnlyProducer::new(probe_webview2(None));
         let result = unsafe { producer.reparent_to_hwnd(0x1234usize as *mut _) };
         assert!(matches!(result, Err(WebSurfaceError::Unsupported(_))));
+    }
+
+    #[test]
+    fn wkwebview_matrix_does_not_claim_unimplemented_operations() {
+        let features = wkwebview_features();
+        assert!(matches!(
+            features.script.result,
+            CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented)
+        ));
+        assert!(matches!(features.devtools, CapabilityStatus::Partial(_)));
+        assert_eq!(features.downloads, CapabilityStatus::Supported);
+        assert!(matches!(features.page_capture, CapabilityStatus::Unsupported(_)));
     }
 
     #[test]
