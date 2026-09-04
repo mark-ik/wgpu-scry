@@ -236,21 +236,39 @@ impl WebSurfaceCapabilities {
                 // unused `mut` without the cfg_attr.
                 #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
                 let mut caps = linux_wpe_capabilities();
+                // The WPE module is also available as a compile-only shell
+                // when its runtime feature is disabled. Do not let a host
+                // probe turn that shell into a claimed DMABUF producer.
+                if !cfg!(feature = "wpe") {
+                    return caps;
+                }
                 // After Phase 4a, the WPE column's `imported_texture`
                 // depends on whether the host's wgpu Vulkan device
                 // has the DMABUF extensions the import path needs.
-                // Without a host (None probe), we keep the
-                // conservative "NativeImportNotYetImplemented" stub.
+                // Without a host (None probe), the producer can still emit
+                // DMABUF frames, but there is no host device against which
+                // to validate import support. Keep the combined probe
+                // conservative without claiming that the producer path is
+                // unimplemented.
                 #[cfg(target_os = "linux")]
-                if let Some(host) = host {
-                    match crate::native_frame::dmabuf::probe_dmabuf_extensions(host) {
-                        Ok(()) => {
-                            caps.imported_texture = CapabilityStatus::Supported;
-                            caps.preferred_mode = WebSurfaceMode::ImportedTexture;
+                match host {
+                    Some(host) => {
+                        match crate::native_frame::dmabuf::probe_dmabuf_extensions(host) {
+                            Ok(()) => {
+                                caps.imported_texture = CapabilityStatus::Supported;
+                                caps.preferred_mode = WebSurfaceMode::ImportedTexture;
+                            }
+                            Err(reason) => {
+                                caps.imported_texture = CapabilityStatus::Unsupported(reason);
+                                caps.preferred_mode = WebSurfaceMode::Unsupported;
+                            }
                         }
-                        Err(reason) => {
-                            caps.imported_texture = CapabilityStatus::Unsupported(reason);
-                        }
+                    }
+                    None => {
+                        caps.imported_texture = CapabilityStatus::Unsupported(
+                            crate::native_frame::UnsupportedReason::HostBackendUnavailable,
+                        );
+                        caps.preferred_mode = WebSurfaceMode::Unsupported;
                     }
                 }
                 caps

@@ -41,6 +41,7 @@ pub struct WebKit6Producer {
     pub(crate) _network_session: NetworkSession,
     pub(crate) size: PhysicalSize<u32>,
     pub(crate) offset: (f32, f32),
+    pub(crate) frame_timeout: std::time::Duration,
     pub(crate) generation: Cell<u64>,
     pub(crate) nav_state: Rc<RefCell<NavState>>,
     /// FIFO of incoming `window.webkit.messageHandlers.scry.postMessage`
@@ -166,6 +167,7 @@ impl WebKit6Producer {
             _network_session: network_session,
             size: config.size,
             offset: config.offset,
+            frame_timeout: config.frame_timeout,
             generation: Cell::new(0),
             nav_state,
             web_messages,

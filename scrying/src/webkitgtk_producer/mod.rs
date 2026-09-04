@@ -86,6 +86,11 @@ pub use producer::WebKitGtkProducer;
 /// `preferred_mode = CpuSnapshot` reflects the current capture path
 /// (`webkit_web_view_get_snapshot`). When a DMABUF / screencopy path
 /// lands this will upgrade to `ImportedTexture`.
+///
+/// The producer cannot initiate that demand-driven snapshot from the
+/// non-blocking `try_acquire_frame` poll. It returns `None` there; callers
+/// that deliberately accept a blocking CPU capture must call
+/// `acquire_frame`.
 pub(crate) fn linux_webkitgtk_capabilities() -> WebSurfaceCapabilities {
     WebSurfaceCapabilities {
         backend: SystemWebviewBackend::WebKitGtk,

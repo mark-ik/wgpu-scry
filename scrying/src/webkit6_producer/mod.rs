@@ -53,6 +53,9 @@ use crate::{SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceMode};
 pub use config::WebKit6ProducerConfig;
 pub use producer::WebKit6Producer;
 
+/// The CPU snapshot path is demand-driven. `try_acquire_frame` therefore
+/// returns `None` without initiating a snapshot; callers that deliberately
+/// accept a blocking capture must call `acquire_frame`.
 pub(crate) fn linux_webkit6_capabilities() -> WebSurfaceCapabilities {
     WebSurfaceCapabilities {
         backend: SystemWebviewBackend::WebKitGtk,

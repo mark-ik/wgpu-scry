@@ -42,6 +42,7 @@ pub struct WebKitGtkProducer {
     pub(crate) _data_manager: WebsiteDataManager,
     pub(crate) size: PhysicalSize<u32>,
     pub(crate) offset: (f32, f32),
+    pub(crate) frame_timeout: std::time::Duration,
     pub(crate) generation: Cell<u64>,
     pub(crate) nav_state: Rc<RefCell<NavState>>,
     /// FIFO of page → host messages pushed by the
@@ -127,6 +128,7 @@ impl WebKitGtkProducer {
             _data_manager: data_manager,
             size: config.size,
             offset: config.offset,
+            frame_timeout: config.frame_timeout,
             generation: Cell::new(0),
             nav_state,
             web_messages,

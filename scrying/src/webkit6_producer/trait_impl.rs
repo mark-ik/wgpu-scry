@@ -40,6 +40,14 @@ impl WebSurfaceProducer for WebKit6Producer {
         self.capture_native()
     }
 
+    fn try_acquire_frame(&mut self) -> Result<Option<WebSurfaceFrame>, WebSurfaceError> {
+        // GTK's snapshot fallback may pump the main loop for the configured
+        // frame timeout. Keep the ordinary polling path genuinely
+        // non-blocking; callers that selected CpuSnapshot should use the
+        // explicit blocking `acquire_frame` operation.
+        Ok(None)
+    }
+
     fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
         WebKit6Producer::load_html(self, html, None);
         Ok(())

@@ -46,23 +46,62 @@ use crate::native_frame::{CapabilityStatus, NativeFrameKind, UnsupportedReason};
 use crate::{SystemWebviewBackend, WebSurfaceCapabilities, WebSurfaceMode};
 
 pub(crate) fn linux_wpe_capabilities() -> WebSurfaceCapabilities {
-    WebSurfaceCapabilities {
-        backend: SystemWebviewBackend::Wpe,
-        preferred_mode: WebSurfaceMode::Unsupported,
-        imported_texture: CapabilityStatus::Unsupported(
-            UnsupportedReason::NativeImportNotYetImplemented,
-        ),
-        native_child_overlay: CapabilityStatus::Unsupported(
-            UnsupportedReason::PlatformNotImplemented,
-        ),
-        cpu_snapshot: CapabilityStatus::Unsupported(
-            UnsupportedReason::NativeImportNotYetImplemented,
-        ),
-        supported_frames: vec![NativeFrameKind::DmaBufImage],
-        reason: if cfg!(feature = "wpe") {
-            "WPE is the Linux primary backend: a headless WPEDisplay + WebKitWebView produces DmaBufImage frames, and a compatible wgpu 30 Vulkan host imports them through Graft."
-        } else {
-            "WPE producer is compiled as a no-op scaffold; rebuild with `--features wpe` to enable the WPEPlatform FFI bridge and DMABUF frame production."
-        },
+    if cfg!(feature = "wpe") {
+        WebSurfaceCapabilities {
+            backend: SystemWebviewBackend::Wpe,
+            preferred_mode: WebSurfaceMode::ImportedTexture,
+            imported_texture: CapabilityStatus::Supported,
+            native_child_overlay: CapabilityStatus::Unsupported(
+                UnsupportedReason::PlatformNotImplemented,
+            ),
+            cpu_snapshot: CapabilityStatus::Unsupported(
+                UnsupportedReason::PlatformNotImplemented,
+            ),
+            supported_frames: vec![NativeFrameKind::DmaBufImage],
+            reason: "WPE is the Linux primary backend: a headless WPEDisplay + WebKitWebView produces DmaBufImage frames, and a compatible wgpu Vulkan host imports them through Graft.",
+        }
+    } else {
+        WebSurfaceCapabilities {
+            backend: SystemWebviewBackend::Wpe,
+            preferred_mode: WebSurfaceMode::Unsupported,
+            imported_texture: CapabilityStatus::Unsupported(
+                UnsupportedReason::PlatformNotImplemented,
+            ),
+            native_child_overlay: CapabilityStatus::Unsupported(
+                UnsupportedReason::PlatformNotImplemented,
+            ),
+            cpu_snapshot: CapabilityStatus::Unsupported(
+                UnsupportedReason::PlatformNotImplemented,
+            ),
+            supported_frames: Vec::new(),
+            reason: "WPE is a compile-only producer shell until the `wpe` feature is enabled; enable it to build the WPEPlatform FFI bridge and DMABUF frame production.",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(feature = "wpe"))]
+    #[test]
+    fn compile_only_wpe_does_not_claim_a_frame_path() {
+        let caps = linux_wpe_capabilities();
+        assert_eq!(caps.preferred_mode, WebSurfaceMode::Unsupported);
+        assert!(matches!(
+            caps.imported_texture,
+            CapabilityStatus::Unsupported(UnsupportedReason::PlatformNotImplemented)
+        ));
+        assert!(caps.supported_frames.is_empty());
+        assert!(caps.reason.contains("compile-only"));
+    }
+
+    #[cfg(feature = "wpe")]
+    #[test]
+    fn live_wpe_claims_dmabuf_import() {
+        let caps = linux_wpe_capabilities();
+        assert_eq!(caps.preferred_mode, WebSurfaceMode::ImportedTexture);
+        assert_eq!(caps.imported_texture, CapabilityStatus::Supported);
+        assert_eq!(caps.supported_frames, vec![NativeFrameKind::DmaBufImage]);
     }
 }

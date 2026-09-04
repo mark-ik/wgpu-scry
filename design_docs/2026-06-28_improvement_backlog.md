@@ -8,6 +8,33 @@ on Windows.
 
 ## In flight (cross-repo, Windows-verifiable)
 
+## Release mechanical closure (2026-09-03)
+
+This slice closes Scry-owned release defects while the shared Graft ownership
+migration remains a separate dependency. The WPE capability report now claims
+DMABUF import only when the `wpe` feature is present, and the combined host
+probe downgrades to `HostBackendUnavailable` without a host or to an explained
+unsupported mode when the Vulkan extensions are absent. WebKitGTK 4.1 and 6.0
+retain each configuration's `frame_timeout`, and their ordinary frame path
+overrides the trait default so it never invokes a blocking snapshot from the
+render-loop poll. The package README disclaimer was removed. Exact checks and
+the remaining Graft dependency are recorded in the progress log below.
+
+### Progress
+
+- **2026-09-03 — landed in this slice:** WPE capability honesty, host-probe
+  downgrade behavior, GTK 4.1/6.0 configured snapshot timeout, genuinely
+  non-blocking GTK polling, compile-only WPE regression tests, and public
+  README cleanup.
+- **2026-09-03 — deferred to Graft Phase 1:** move-only `NativeFrame`
+  ownership and by-value import. Scry still translates its borrowed
+  `DmaBufImage`/DX12 frame into Graft's current boundary; changing that here
+  would create a partial cross-repository API migration.
+- **2026-09-03 — remains open for the neutral-contract assessment:** expand
+  Scry's capability surface one-to-one for cookies, script, capture,
+  devtools, downloads, popups, drag/drop, IME, accessibility, and degradation
+  reasons before asking Inker or the adapters to infer those features.
+
 - **Converge on `grafting` as the shared native-texture interop crate.** `welding`
   and `scrying` each carry their own DX12 / Metal / Vulkan-DMABUF import + sync
   (welding's `vulkan_dmabuf` is literally "Ported from `wgpu-graft/grafting`"), so

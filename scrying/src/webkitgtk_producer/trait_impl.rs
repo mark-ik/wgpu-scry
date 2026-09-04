@@ -37,6 +37,14 @@ impl WebSurfaceProducer for WebKitGtkProducer {
         self.capture_cpu_snapshot()
     }
 
+    fn try_acquire_frame(&mut self) -> Result<Option<WebSurfaceFrame>, WebSurfaceError> {
+        // GTK's offscreen snapshot API is demand-driven and only exposes a
+        // blocking completion callback. Never invoke it from the render-loop
+        // polling path: a host that wants a CPU snapshot must call
+        // `acquire_frame` explicitly.
+        Ok(None)
+    }
+
     fn load_html(&mut self, html: &str) -> Result<(), WebSurfaceError> {
         WebKitGtkProducer::load_html(self, html, None);
         Ok(())

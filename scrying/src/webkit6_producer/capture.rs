@@ -178,7 +178,7 @@ impl WebKit6Producer {
     }
 
     pub fn capture_cpu_snapshot(&self) -> Result<WebSurfaceFrame, WebSurfaceError> {
-        let timeout = std::time::Duration::from_secs(2);
+        let timeout = self.frame_timeout;
         let result: Rc<RefCell<Option<Result<gdk::Texture, String>>>> = Rc::new(RefCell::new(None));
         let r = result.clone();
         self.webview.snapshot(
