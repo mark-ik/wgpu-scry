@@ -46,7 +46,10 @@ cd "$(dirname "$0")/.."
 # Mark the session active and hold display/system idle sleep for the lifetime
 # of the capture suite. Keep ordinary, non-capture developer runs unchanged.
 if [[ "${CAPTURE:-0}" = "1" ]] && command -v caffeinate >/dev/null 2>&1; then
-    caffeinate -u -t 5
+    caffeinate -u -t 5 &
+    # Match the registry-only harness that produced the release receipt: give
+    # WindowServer time to wake before starting the display/system hold.
+    sleep 2
     caffeinate -dims -w $$ &
     echo "==> ScreenCaptureKit display-awake hold active"
 fi
