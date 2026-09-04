@@ -45,7 +45,7 @@ webkit6 = ["dep:gtk4", "dep:gsk4", "dep:webkit6"]
 # Requires WPEWebKit dev libs at build time (Fedora 44):
 #   sudo dnf install -y wpewebkit-devel libwpe-devel wpebackend-fdo-devel
 # Links libWPEWebKit-2.0.so via pkg-config (wpe-webkit-2.0) in build.rs.
-wpe = ["dep:glib", "dep:soup"]
+wpe = ["dep:gio", "dep:glib", "dep:soup"]
 
 [dependencies]
 dpi.workspace = true
@@ -82,6 +82,7 @@ webkit2gtk = { version = "2.0", features = ["v2_40"], optional = true }
 gtk = { version = "0.18", optional = true }
 gdk = { version = "0.18", optional = true }
 glib = { version = "0.18", optional = true }
+gio = { version = "0.18", optional = true }
 # Pulls in JavaScriptCore Value introspection (`ValueExt::to_str`) so
 # the JS-messaging path can extract strings out of `JavascriptResult`s
 # delivered by the WebKit UserContentManager. Pinned to 1.1 to match

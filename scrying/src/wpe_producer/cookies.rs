@@ -17,23 +17,23 @@
 //! The op-start FFIs are GAsync (fire-and-forget); their results land
 //! through a `GAsyncReadyCallback` trampoline that the matching
 //! `*_finish` FFI then decodes. We bridge that into a synchronous call
-//! by stuffing the result into an `Rc<RefCell<Option<...>>>` cell and
-//! pumping the producer's affine `MainContext` via
+//! by retaining a `CookieOperation` state for the callback, writing the result
+//! into its `Rc<RefCell<Option<...>>>` cell, and pumping the producer's affine
+//! `MainContext` via
 //! [`super::headless::pump_until`] until the cell fills (or the deadline
-//! elapses).
+//! elapses). Each operation owns a strong GObject reference to its cookie
+//! manager and a `GCancellable`; a timeout cancels the operation, while its
+//! callback retains the state until `_finish` has run.
 //!
 //! ## Trampoline payload contract
 //!
-//! Each sync call boxes a `(manager_ptr, Rc<RefCell<Option<...>>>)`
-//! tuple, `Box::into_raw`s it, and passes the raw pointer as
-//! `user_data`. The C-side trampoline takes the box back with
-//! `Box::from_raw`, calls the matching `*_finish` FFI to extract the
-//! value, writes it into the cell (the caller's clone of the same `Rc`
-//! observes the write), and drops the box (releasing one Rc). Returning
-//! the manager pointer through the box rather than capturing it in the
-//! caller's closure mirrors the way the gtk precedent's higher-level
-//! `manager.add_cookie(...)` wrapper hides it — same shape, just
-//! hand-rolled.
+//! Each sync call passes one strong `Rc<CookieOperation<_>>` reference as raw
+//! `user_data`. The C-side trampoline recovers that one reference, calls the
+//! matching `*_finish` FFI against the operation's owned cookie-manager
+//! reference, writes the result into the cell, and drops its callback
+//! reference. If the synchronous wait times out or the producer drops, the
+//! in-flight callback still owns both the manager and cancellation object; it
+//! cannot dereference a producer-borrowed pointer.
 //!
 //! Three trampolines, not one — `_get` returns `*mut GList`, `_add`
 //! and `_delete` return `gboolean`. A single generic trampoline would
@@ -50,7 +50,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use glib::translate::ToGlibPtr;
+use gio::Cancellable;
+use gio::prelude::CancellableExt;
+use glib::translate::{ToGlibPtr, from_glib_none};
 use soup::Cookie as SoupCookie;
 
 use super::ffi;
@@ -60,12 +62,68 @@ use crate::{Cookie, WebSurfaceError};
 /// Deadline budget for any single cookie op. Matches the GTK precedent.
 const COOKIE_OP_TIMEOUT: Duration = Duration::from_secs(3);
 
+type CookieResult<T> = Rc<RefCell<Option<Result<T, String>>>>;
+
+/// State owned jointly by the synchronous caller and its one-shot GAsync
+/// callback. The `ObjectRef` is a strong GObject reference, so this operation
+/// remains valid even if the WPE producer releases its WebView after a timeout.
+struct CookieOperation<T> {
+    manager: glib::ObjectRef,
+    cancellable: Cancellable,
+    result: CookieResult<T>,
+}
+
+impl<T> CookieOperation<T> {
+    /// Promote WebKit's transfer-none manager pointer into a strong reference
+    /// that lasts until the async callback has consumed its result.
+    ///
+    /// SAFETY: `manager` must be a valid non-null `WebKitCookieManager` GObject
+    /// pointer for this call. The caller obtains it from the live WebView.
+    unsafe fn new(manager: *mut ffi::WebKitCookieManager) -> Rc<Self> {
+        debug_assert!(!manager.is_null());
+        let manager: glib::ObjectRef = unsafe { from_glib_none(manager.cast()) };
+        Rc::new(Self {
+            manager,
+            cancellable: Cancellable::new(),
+            result: Rc::new(RefCell::new(None)),
+        })
+    }
+
+    fn manager(&self) -> *mut ffi::WebKitCookieManager {
+        self.manager.to_glib_none().0.cast()
+    }
+
+    fn cancellable(&self) -> *mut std::ffi::c_void {
+        self.cancellable.to_glib_none().0.cast()
+    }
+
+    fn cancel(&self) {
+        self.cancellable.cancel();
+    }
+}
+
+/// Pass one strong `Rc` reference through a C callback's `user_data` slot.
+/// The matching [`take_callback_ref`] call must run exactly once, as guaranteed
+/// by the WebKit GAsync operation contract.
+fn callback_ref<T>(value: &Rc<T>) -> *mut std::ffi::c_void {
+    Rc::into_raw(Rc::clone(value)).cast_mut().cast()
+}
+
+/// Recover the callback-owned strong reference from `user_data`.
+///
+/// SAFETY: `user_data` must have come from one matching [`callback_ref`] call,
+/// and must not have been recovered before.
+unsafe fn take_callback_ref<T>(user_data: *mut std::ffi::c_void) -> Rc<T> {
+    debug_assert!(!user_data.is_null());
+    unsafe { Rc::from_raw(user_data.cast()) }
+}
+
 impl WpeProducer {
     /// Borrow the cookie manager off the producer's WebView via the
     /// network session. Both intermediate getters are transfer-none
     /// (the WebView owns the session; the session owns the manager) —
     /// no ref bookkeeping needed.
-    fn cookie_manager(&self) -> *mut ffi::WebKitCookieManager {
+    fn cookie_manager(&self) -> Result<*mut ffi::WebKitCookieManager, WebSurfaceError> {
         let raw_view: *mut ffi::WebKitWebView =
             ToGlibPtr::<*mut glib::gobject_ffi::GObject>::to_glib_none(&self.handles.webview).0
                 as *mut _;
@@ -77,10 +135,21 @@ impl WpeProducer {
         // the network session owns its cookie manager. Both pointers are
         // valid for the duration of the WebView's lifetime, which spans
         // the producer's.
-        unsafe {
+        let manager = unsafe {
             let session = ffi::webkit_web_view_get_network_session(raw_view);
+            if session.is_null() {
+                return Err(WebSurfaceError::NotReady(
+                    "WPE WebView has no network session yet",
+                ));
+            }
             ffi::webkit_network_session_get_cookie_manager(session)
+        };
+        if manager.is_null() {
+            return Err(WebSurfaceError::NotReady(
+                "WPE network session has no cookie manager yet",
+            ));
         }
+        Ok(manager)
     }
 
     /// Fetch all cookies the store currently has for `url`, blocking
@@ -89,37 +158,35 @@ impl WpeProducer {
     /// per-URI rather than store-wide. Hosts that need full enumeration
     /// can iterate known origins.
     pub fn request_cookies_for_url(&self, url: &str) -> Result<Vec<Cookie>, WebSurfaceError> {
-        let manager = self.cookie_manager();
+        let operation = unsafe { CookieOperation::new(self.cookie_manager()?) };
         let c_url = std::ffi::CString::new(url).map_err(|_| {
             WebSurfaceError::Platform("request_cookies_for_url: URL contained interior NUL".into())
         })?;
-        let result: Rc<RefCell<Option<Result<Vec<Cookie>, String>>>> = Rc::new(RefCell::new(None));
-        // The trampoline takes ownership of one Rc clone via the box;
-        // we keep the other Rc clone here for the drain after pumping.
-        let boxed: Box<GetUserData> = Box::new((manager, result.clone()));
-        let raw_ud = Box::into_raw(boxed) as *mut std::ffi::c_void;
-        // SAFETY: `manager`, `c_url`, and `raw_ud` are valid for the
-        // entire async-op lifetime; webkit copies the URL string before
-        // returning. NULL cancellable is the documented "no cancellation"
-        // sentinel. The trampoline takes back the user_data on
-        // completion via Box::from_raw — exactly one trampoline call per
-        // op, so the box is reclaimed exactly once.
+        let raw_ud = callback_ref(&operation);
+        // SAFETY: the operation owns both `manager` and `GCancellable` for the
+        // callback lifetime. WebKit copies `c_url` before this call returns.
         unsafe {
             ffi::webkit_cookie_manager_get_cookies(
-                manager,
+                operation.manager(),
                 c_url.as_ptr(),
-                std::ptr::null_mut(),
+                operation.cancellable(),
                 cookie_get_trampoline,
                 raw_ud,
             );
         }
         let deadline = Instant::now() + COOKIE_OP_TIMEOUT;
-        super::headless::pump_until(&self.handles.main_context, deadline, || {
-            result.borrow().is_some()
+        if let Err(error) =
+            super::headless::pump_until(&self.handles.main_context, deadline, || {
+                operation.result.borrow().is_some()
+            })
+        {
+            operation.cancel();
+            return Err(error);
+        }
+        let value = operation.result.borrow_mut().take().ok_or_else(|| {
+            operation.cancel();
+            WebSurfaceError::NotReady("WPE cookie get did not deliver in time")
         })?;
-        let value = result.borrow_mut().take().ok_or(WebSurfaceError::NotReady(
-            "WPE cookie get did not deliver in time",
-        ))?;
         value.map_err(|e| WebSurfaceError::Platform(format!("cookie get failed: {e}")))
     }
 
@@ -152,13 +219,11 @@ impl WpeProducer {
                 ));
             }
         }
-        let manager = self.cookie_manager();
+        let operation = unsafe { CookieOperation::new(self.cookie_manager()?) };
         // soup3 0.5's `to_glib_none` for `Cookie` takes `&mut self`,
         // matching the precedent — materialize a local mutable cookie.
         let mut soup_cookie = scry_to_soup(cookie);
-        let result: Rc<RefCell<Option<Result<(), String>>>> = Rc::new(RefCell::new(None));
-        let boxed: Box<OpUserData> = Box::new((manager, result.clone()));
-        let raw_ud = Box::into_raw(boxed) as *mut std::ffi::c_void;
+        let raw_ud = callback_ref(&operation);
         // SAFETY: `soup_cookie`'s to_glib_none returns a SoupCookie*
         // borrowed from the local; webkit_cookie_manager_{add,delete}_cookie
         // copies its own reference of the cookie struct (per the WebKit
@@ -175,28 +240,34 @@ impl WpeProducer {
         };
         // SAFETY: all four pointer args are valid for the call;
         // `soup_cookie` is owned for the rest of this fn so its raw
-        // alias remains valid during the synchronous start call. NULL
-        // cancellable is the documented sentinel. Exactly one
-        // trampoline invocation per op reclaims the boxed user_data.
+        // alias remains valid during the synchronous start call. The operation
+        // owns its cancellable and callback state until `_finish` runs.
         unsafe {
             start(
-                manager,
+                operation.manager(),
                 raw_cookie,
-                std::ptr::null_mut(),
+                operation.cancellable(),
                 trampoline,
                 raw_ud,
             );
         }
         let deadline = Instant::now() + COOKIE_OP_TIMEOUT;
-        super::headless::pump_until(&self.handles.main_context, deadline, || {
-            result.borrow().is_some()
-        })?;
-        result
+        if let Err(error) =
+            super::headless::pump_until(&self.handles.main_context, deadline, || {
+                operation.result.borrow().is_some()
+            })
+        {
+            operation.cancel();
+            return Err(error);
+        }
+        operation
+            .result
             .borrow_mut()
             .take()
-            .ok_or(WebSurfaceError::NotReady(
-                "WPE cookie op did not complete in time",
-            ))?
+            .ok_or_else(|| {
+                operation.cancel();
+                WebSurfaceError::NotReady("WPE cookie op did not complete in time")
+            })?
             .map_err(|e| WebSurfaceError::Platform(format!("cookie op failed: {e}")))
     }
 }
@@ -218,18 +289,6 @@ type CookieOpStart = unsafe extern "C" fn(
     user_data: *mut std::ffi::c_void,
 );
 
-/// Trampoline user-data payload for `request_cookies_for_url`.
-type GetUserData = (
-    *mut ffi::WebKitCookieManager,
-    Rc<RefCell<Option<Result<Vec<Cookie>, String>>>>,
-);
-
-/// Trampoline user-data payload for `set_cookie` / `delete_cookie`.
-type OpUserData = (
-    *mut ffi::WebKitCookieManager,
-    Rc<RefCell<Option<Result<(), String>>>>,
-);
-
 /// Trampoline for `webkit_cookie_manager_get_cookies`. Calls the
 /// `_finish` FFI to extract a `GList<SoupCookie*>`, translates each
 /// entry to a scry [`Cookie`], frees the list, and writes the result
@@ -239,21 +298,15 @@ unsafe extern "C" fn cookie_get_trampoline(
     result: *mut ffi::GAsyncResult,
     user_data: *mut std::ffi::c_void,
 ) {
-    // SAFETY: `user_data` was produced by `Box::into_raw` on a
-    // `Box<GetUserData>` immediately before the matching
-    // `webkit_cookie_manager_get_cookies` call, and webkit guarantees
-    // the callback fires exactly once per op. Recovering the box here
-    // reclaims that single allocation.
-    let boxed: Box<GetUserData> = unsafe { Box::from_raw(user_data as *mut GetUserData) };
-    let (manager, cell) = *boxed;
+    // SAFETY: `user_data` owns one strong callback reference created for this
+    // exact GAsync operation. WebKit invokes its ready callback exactly once.
+    let operation: Rc<CookieOperation<Vec<Cookie>>> = unsafe { take_callback_ref(user_data) };
     let mut error: *mut glib::ffi::GError = std::ptr::null_mut();
-    // SAFETY: `manager` is the transfer-none pointer the start call
-    // captured; the WebView (and thus the manager) outlives the async
-    // op because the producer is thread-affine and we don't drop the
-    // producer between op-start and op-finish. `result` is the per-op
-    // GAsyncResult webkit hands us.
-    let g_list =
-        unsafe { ffi::webkit_cookie_manager_get_cookies_finish(manager, result, &mut error) };
+    // SAFETY: `operation` owns a strong manager reference for the whole
+    // callback, independent of the producer's WebView lifetime.
+    let g_list = unsafe {
+        ffi::webkit_cookie_manager_get_cookies_finish(operation.manager(), result, &mut error)
+    };
     if !error.is_null() {
         // SAFETY: `error` is a transfer-full GError* from the _finish
         // FFI; `from_glib_full` adopts ownership and frees on drop.
@@ -262,7 +315,7 @@ unsafe extern "C" fn cookie_get_trampoline(
         }
         .message()
         .to_string();
-        *cell.borrow_mut() = Some(Err(msg));
+        *operation.result.borrow_mut() = Some(Err(msg));
         return;
     }
     let mut cookies = Vec::new();
@@ -288,7 +341,7 @@ unsafe extern "C" fn cookie_get_trampoline(
     unsafe {
         glib::ffi::g_list_free(g_list);
     }
-    *cell.borrow_mut() = Some(Ok(cookies));
+    *operation.result.borrow_mut() = Some(Ok(cookies));
 }
 
 /// Trampoline for `webkit_cookie_manager_add_cookie`.
@@ -297,13 +350,14 @@ unsafe extern "C" fn cookie_add_trampoline(
     result: *mut ffi::GAsyncResult,
     user_data: *mut std::ffi::c_void,
 ) {
-    // SAFETY: see `cookie_get_trampoline` — same single-fire contract,
-    // payload type is `OpUserData` here.
-    let boxed: Box<OpUserData> = unsafe { Box::from_raw(user_data as *mut OpUserData) };
-    let (manager, cell) = *boxed;
+    // SAFETY: see `cookie_get_trampoline` — this reclaims the matching
+    // callback-owned strong reference exactly once.
+    let operation: Rc<CookieOperation<()>> = unsafe { take_callback_ref(user_data) };
     let mut error: *mut glib::ffi::GError = std::ptr::null_mut();
-    let ok = unsafe { ffi::webkit_cookie_manager_add_cookie_finish(manager, result, &mut error) };
-    finish_op_into_cell(ok, error, &cell);
+    let ok = unsafe {
+        ffi::webkit_cookie_manager_add_cookie_finish(operation.manager(), result, &mut error)
+    };
+    finish_op_into_cell(ok, error, &operation.result);
 }
 
 /// Trampoline for `webkit_cookie_manager_delete_cookie`.
@@ -312,13 +366,14 @@ unsafe extern "C" fn cookie_delete_trampoline(
     result: *mut ffi::GAsyncResult,
     user_data: *mut std::ffi::c_void,
 ) {
-    // SAFETY: see `cookie_get_trampoline` — same single-fire contract.
-    let boxed: Box<OpUserData> = unsafe { Box::from_raw(user_data as *mut OpUserData) };
-    let (manager, cell) = *boxed;
+    // SAFETY: see `cookie_get_trampoline` — this reclaims the matching
+    // callback-owned strong reference exactly once.
+    let operation: Rc<CookieOperation<()>> = unsafe { take_callback_ref(user_data) };
     let mut error: *mut glib::ffi::GError = std::ptr::null_mut();
-    let ok =
-        unsafe { ffi::webkit_cookie_manager_delete_cookie_finish(manager, result, &mut error) };
-    finish_op_into_cell(ok, error, &cell);
+    let ok = unsafe {
+        ffi::webkit_cookie_manager_delete_cookie_finish(operation.manager(), result, &mut error)
+    };
+    finish_op_into_cell(ok, error, &operation.result);
 }
 
 /// Shared decode for the add/delete trampolines: a gboolean + GError**
@@ -343,6 +398,37 @@ fn finish_op_into_cell(
         return;
     }
     *cell.borrow_mut() = Some(Ok(()));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct DropProbe(Rc<Cell<u32>>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[test]
+    fn callback_reference_keeps_state_alive_after_caller_timeout() {
+        let drops = Rc::new(Cell::new(0));
+        let state = Rc::new(DropProbe(Rc::clone(&drops)));
+        let user_data = super::callback_ref(&state);
+
+        // This models the synchronous caller returning after timeout. The
+        // callback's strong reference keeps the operation state alive until
+        // WebKit invokes the ready callback.
+        drop(state);
+        assert_eq!(drops.get(), 0);
+
+        let callback_state: Rc<DropProbe> = unsafe { super::take_callback_ref(user_data) };
+        drop(callback_state);
+        assert_eq!(drops.get(), 1);
+    }
 }
 
 // --- translators (verbatim from the GTK precedent) ---

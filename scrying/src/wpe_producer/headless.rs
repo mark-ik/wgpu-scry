@@ -26,6 +26,7 @@
 //! WebKit state is independent of this one).
 
 use std::collections::HashMap;
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 
 use super::ffi;
 use crate::{UrlSchemeHandlerFn, WebSurfaceError};
@@ -231,20 +232,17 @@ unsafe fn dmabuf_to_image(
     if n_planes == 0 {
         return None;
     }
-    let mut planes: Vec<DmaBufPlane> = Vec::with_capacity(n_planes as usize);
-    for i in 0..n_planes {
-        let raw_fd = unsafe { ffi::wpe_buffer_dma_buf_get_fd(dmabuf, i) };
-        // dup so the importer can own its copy independently of WPE's pool.
-        let fd = unsafe { libc::dup(raw_fd) };
-        if fd < 0 {
-            return None;
-        }
-        planes.push(DmaBufPlane {
-            fd,
+    let source_planes = (0..n_planes)
+        .map(|i| DmaBufPlane {
+            fd: unsafe { ffi::wpe_buffer_dma_buf_get_fd(dmabuf, i) },
             offset: unsafe { ffi::wpe_buffer_dma_buf_get_offset(dmabuf, i) },
             stride: unsafe { ffi::wpe_buffer_dma_buf_get_stride(dmabuf, i) },
-        });
-    }
+        })
+        .collect::<Vec<_>>();
+    // `OwnedFd` keeps every successful duplication owned while the whole
+    // multi-plane handoff is assembled. A later dup failure therefore closes
+    // the earlier descriptors instead of leaking them out of this callback.
+    let planes = duplicate_plane_fds(source_planes, |fd| unsafe { libc::dup(fd) })?;
     // SAFETY: each plane fd is a successful dup owned exclusively by this
     // frame constructor. `DmaBufImage` closes them on every later path.
     unsafe {
@@ -262,6 +260,41 @@ unsafe fn dmabuf_to_image(
         )
     }
     .ok()
+}
+
+/// Duplicate a set of borrowed DMABUF plane descriptors into a new owned
+/// descriptor set. The returned raw descriptors transfer ownership to
+/// [`DmaBufImage::from_raw_owned_parts`].
+///
+/// Keeping the intermediate descriptors in [`OwnedFd`] is important: this
+/// helper has one fallible operation per plane, and any earlier successful
+/// duplicate must close if a later operation fails.
+fn duplicate_plane_fds(
+    source_planes: impl IntoIterator<Item = DmaBufPlane>,
+    mut duplicate: impl FnMut(i32) -> i32,
+) -> Option<Vec<DmaBufPlane>> {
+    let mut owned_planes = Vec::new();
+    for plane in source_planes {
+        let fd = duplicate(plane.fd);
+        if fd < 0 {
+            return None;
+        }
+        // SAFETY: a successful `duplicate` result is a newly owned file
+        // descriptor. It remains owned by this local until we intentionally
+        // transfer it below.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        owned_planes.push((fd, plane.offset, plane.stride));
+    }
+    Some(
+        owned_planes
+            .into_iter()
+            .map(|(fd, offset, stride)| DmaBufPlane {
+                fd: fd.into_raw_fd(),
+                offset,
+                stride,
+            })
+            .collect(),
+    )
 }
 
 /// Connect the `WPEView::buffer-rendered` frame seam.
@@ -324,6 +357,55 @@ pub(super) fn connect_buffer_rendered(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
+    use crate::native_frame::DmaBufPlane;
+
+    #[test]
+    fn partial_duplicate_failure_closes_earlier_descriptors() {
+        let mut source = [0; 2];
+        assert_eq!(unsafe { libc::pipe(source.as_mut_ptr()) }, 0);
+        let first_duplicate = Cell::new(-1);
+        let calls = Cell::new(0);
+        let result = super::duplicate_plane_fds(
+            vec![
+                DmaBufPlane {
+                    fd: source[0],
+                    offset: 0,
+                    stride: 16,
+                },
+                DmaBufPlane {
+                    fd: source[0],
+                    offset: 16,
+                    stride: 16,
+                },
+            ],
+            |fd| {
+                let call = calls.get();
+                calls.set(call + 1);
+                if call == 0 {
+                    let duplicated = unsafe { libc::dup(fd) };
+                    first_duplicate.set(duplicated);
+                    duplicated
+                } else {
+                    -1
+                }
+            },
+        );
+
+        assert!(result.is_none());
+        assert!(first_duplicate.get() >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(first_duplicate.get(), libc::F_GETFD) },
+            -1,
+            "the first successful duplicate must close after the next dup fails"
+        );
+        unsafe {
+            libc::close(source[0]);
+            libc::close(source[1]);
+        }
+    }
+
     /// End-to-end runtime smoke for 4c.3: construct a headless producer,
     /// navigate to an inline page, assert load completes, acquire a real
     /// `DmaBufImage`, then resize and acquire another frame. Strict

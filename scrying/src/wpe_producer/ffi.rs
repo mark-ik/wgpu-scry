@@ -144,8 +144,8 @@ pub struct GAsyncResult {
 /// Matches the C `GAsyncReadyCallback` typedef. The `source` arg is the
 /// GObject that initiated the async op (in our case the
 /// `WebKitCookieManager`); `result` is the per-op `GAsyncResult`
-/// the matching `*_finish` FFI consumes; `user_data` is the
-/// `Box::into_raw`'d (manager, cell) pointer the trampoline takes back.
+/// the matching `*_finish` FFI consumes; `user_data` is an owned strong
+/// reference to the Rust operation state that the trampoline releases.
 pub type GAsyncReadyCallback = unsafe extern "C" fn(
     source: *mut glib::gobject_ffi::GObject,
     result: *mut GAsyncResult,
@@ -372,7 +372,7 @@ unsafe extern "C" {
     pub fn webkit_cookie_manager_get_cookies(
         manager: *mut WebKitCookieManager,
         uri: *const c_char,
-        cancellable: *mut std::ffi::c_void, // NULL
+        cancellable: *mut std::ffi::c_void, // GCancellable* or NULL
         callback: GAsyncReadyCallback,
         user_data: *mut std::ffi::c_void,
     );
