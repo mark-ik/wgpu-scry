@@ -3932,7 +3932,10 @@ impl AppState {
             Some(vec![
                 (1280, 800, Duration::from_secs(6)),
                 (768, 600, Duration::from_secs(10)),
-                (1024, 768, Duration::from_secs(14)),
+                // Keep the final target distinct from the 1024x768 logical
+                // startup size. Otherwise expected-dimension deduplication can
+                // let the test pass before this last resize is observed.
+                (1024, 700, Duration::from_secs(14)),
             ])
         } else {
             None
@@ -4069,6 +4072,10 @@ mod capture_size_tests {
         assert_eq!(
             capture_webview_size_for_logical_window(768, 600, 2.0),
             (768, 1200)
+        );
+        assert_eq!(
+            capture_webview_size_for_logical_window(1024, 700, 2.0),
+            (1024, 1400)
         );
     }
 }
