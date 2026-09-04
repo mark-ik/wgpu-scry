@@ -41,6 +41,16 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
+# ScreenCaptureKit can keep delivering status-only samples when a logged-in
+# runner's display has idled, even though AppKit and WKWebView still advance.
+# Mark the session active and hold display/system idle sleep for the lifetime
+# of the capture suite. Keep ordinary, non-capture developer runs unchanged.
+if [[ "${CAPTURE:-0}" = "1" ]] && command -v caffeinate >/dev/null 2>&1; then
+    caffeinate -u -t 5
+    caffeinate -dims -w $$ &
+    echo "==> ScreenCaptureKit display-awake hold active"
+fi
+
 # Per-mode wall-clock cap. The internal step deadlines fail any
 # stuck step in 5s, so 60s is plenty for a healthy run.
 TIMEOUT="${TIMEOUT:-60}"
